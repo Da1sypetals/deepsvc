@@ -1,0 +1,15 @@
+[package]
+name = "deepsvc-engine"
+version = "0.1.0"
+edition = "2024"
+
+# 推理在插件进程内执行：编译为静态库直接链入插件（OpenTune 的进程级共享 session 模式）
+[lib]
+name = "deepsvc_engine"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+yingmusic = { path = "../yingmusic-svc-mlx" }
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
