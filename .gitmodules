@@ -1,0 +1,12 @@
+[submodule "yingmusic-svc-mlx"]
+	path = yingmusic-svc-mlx
+	url = git@github.com:Da1sypetals/yingmusic-svc-mlx.git
+[submodule "modules/JUCE"]
+	path = modules/JUCE
+	url = https://github.com/juce-framework/JUCE
+[submodule "modules/ARA_SDK"]
+	path = modules/ARA_SDK
+	url = https://github.com/Celemony/ARA_SDK
+[submodule "modules/soxr"]
+	path = modules/soxr
+	url = https://github.com/chirlu/soxr
