@@ -168,6 +168,11 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     addAndMakeVisible (pianoRoll);
     addChildComponent (overviewStrip);
 
+    // Slider 不响应 parentHierarchyChanged：它的数值文本框在构造时按默认
+    // LookAndFeel（V4 深色主题，白字）创建并缓存颜色，加入层级后不会重建。
+    // 所有子组件就位后手动传播一次，强制它们按当前 LookAndFeel 重建
+    sendLookAndFeelChange();
+
     overviewStrip.addListener (this);
 
     // 音色选择写入激活槽位并随内容持久化
@@ -578,11 +583,12 @@ void DeepSvcEditor::pushEditedContentData()
 
     if (const auto* content = dc->findContent (presentedContentKey))
     {
-        // 钢琴卷永远显示激活槽位的原音频波形与原音频音高（docs/ara.md 第 6.5 节）
+        // 钢琴卷永远显示激活槽位的原音频波形与原音频音高（docs/ara.md 第 6.5 节）。
+        // 源音频经 readSourceAudio 按需物化：工程重开后缓存为空，首次推送时从宿主读取
         const auto& slot = content->active();
         f0Times = slot.f0Times;
         f0Values = slot.f0Values;
-        audio = slot.sourceAudio;
+        audio = dc->readSourceAudio (presentedContentKey, content->activeSlot);
     }
 
     pianoRoll.updateEditedContentData (std::move (audio), std::move (f0Times),
@@ -711,6 +717,13 @@ void DeepSvcEditor::startSynth()
     }
 
     const auto params = parameters::makeSynthParams (audioProcessor.apvts);
+
+    // 激活槽位还没有音高数据时先执行音高检测：引擎队列按提交顺序串行执行，
+    // 检测完成后才轮到合成（docs/ara.md 第 6.2 节）
+    if (const auto* content = dc->findContent (presentedContentKey))
+        if (content->slots[static_cast<size_t> (displayedSlot)].f0Values.empty())
+            dc->requestDetect (presentedContentKey, displayedSlot, params.f0Estimator);
+
     dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
     dc->requestSynth (presentedContentKey, displayedSlot,
                       timbreLibrary.fileFor (timbre).getFullPathName(),

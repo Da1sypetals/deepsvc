@@ -223,4 +223,13 @@ juce::BorderSize<int> DeepSvcLookAndFeel::getLabelBorderSize (juce::Label&)
     return {};
 }
 
+void DeepSvcLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
+{
+    constexpr int leftPadding = 8;
+    label.setBounds (leftPadding, 1,
+                     box.getWidth() - leftPadding - box.getHeight(),
+                     box.getHeight() - 2);
+    label.setFont (getComboBoxFont (box));
+}
+
 } // namespace deepsvc

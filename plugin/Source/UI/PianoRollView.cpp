@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../DebugLog.h"
 #include "UIColors.h"
 
 // 对应 OpenTune Source/Standalone/UI/PianoRollComponent.cpp 的显示与视口部分
@@ -265,6 +266,27 @@ void PianoRollView::zoomHorizontalAt (int mouseX, double factor)
         onUserViewportChanged();
 }
 
+// 纵向缩放：以光标下的音高为锚点调整琴键高度
+void PianoRollView::zoomVerticalAt (int mouseY, double factor)
+{
+    const auto mapper = makeViewMapper();
+    const float anchorMidi = mapper.yToMidi (static_cast<float> (mouseY - rulerHeight));
+
+    pixelsPerSemitone = juce::jlimit (5.0f, 40.0f,
+                                      pixelsPerSemitone * static_cast<float> (factor));
+
+    verticalScrollOffset = (maxMidi - anchorMidi) * pixelsPerSemitone
+        - static_cast<float> (mouseY - rulerHeight);
+    const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
+    verticalScrollOffset = juce::jlimit (0.0f, maxScroll, verticalScrollOffset);
+
+    updateScrollBarRange();
+    userHasManuallyZoomed = true;
+    repaint();
+    if (onUserViewportChanged)
+        onUserViewportChanged();
+}
+
 void PianoRollView::tryConsumeInitialF0View()
 {
     if (! initialF0ViewPending || ! editedContentKey.isValid())
@@ -388,7 +410,8 @@ void PianoRollView::scrollBarMoved (juce::ScrollBar* scrollBar, double newRangeS
 }
 
 //==============================================================================
-// 交互：滚轮横向滚动、Shift+滚轮纵向滚动、Cmd+滚轮横向缩放、触控板捏合缩放、双击适配全长
+// 交互：滚轮上下滚动、Shift+滚轮左右滚动、Cmd+滚轮纵向缩放、Cmd+Shift+滚轮横向缩放、
+// 触控板双指两轴滚动、捏合横向缩放、双击适配全长、拖拽双轴平移（docs/ara.md 第 6.5 节）
 
 void PianoRollView::mouseDown (const juce::MouseEvent& e)
 {
@@ -396,7 +419,6 @@ void PianoRollView::mouseDown (const juce::MouseEvent& e)
         return;
 
     isPanning = true;
-    panAxis = PanAxis::none;
     panStartPos = e.getPosition();
     panStartVisibleStart = timelineCamera.visibleStartSeconds;
     panStartVerticalOffset = verticalScrollOffset;
@@ -411,30 +433,17 @@ void PianoRollView::mouseDrag (const juce::MouseEvent& e)
     const int deltaX = e.x - panStartPos.x;
     const int deltaY = e.y - panStartPos.y;
 
-    // 轴锁定：死区内不动，锁定后只应用一个轴
-    constexpr int lockThreshold = 5;
-    if (panAxis == PanAxis::none)
-    {
-        if (std::abs (deltaX) < lockThreshold && std::abs (deltaY) < lockThreshold)
-            return;
-        panAxis = std::abs (deltaX) >= std::abs (deltaY) ? PanAxis::horizontal : PanAxis::vertical;
-    }
+    // 自由平移：两个轴同时跟随拖拽
+    const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
+    verticalScrollOffset = juce::jlimit (0.0f, maxScroll, panStartVerticalOffset - static_cast<float> (deltaY));
+    updateScrollBarRange();
 
-    if (panAxis == PanAxis::vertical)
-    {
-        const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
-        verticalScrollOffset = juce::jlimit (0.0f, maxScroll, panStartVerticalOffset - static_cast<float> (deltaY));
-        updateScrollBarRange();
-        repaint();
-    }
-    else
-    {
-        const double newVisibleStart = panStartVisibleStart - deltaX / timelineCamera.pixelsPerSecond;
-        commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
-                                                    newVisibleStart,
-                                                    0.0,
-                                                    timelineCamera.pixelsPerSecond));
-    }
+    const double newVisibleStart = panStartVisibleStart - deltaX / timelineCamera.pixelsPerSecond;
+    commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
+                                                newVisibleStart,
+                                                0.0,
+                                                timelineCamera.pixelsPerSecond));
+    repaint();
 
     userHasManuallyZoomed = true;
     if (onUserViewportChanged)
@@ -444,7 +453,6 @@ void PianoRollView::mouseDrag (const juce::MouseEvent& e)
 void PianoRollView::mouseUp (const juce::MouseEvent&)
 {
     isPanning = false;
-    panAxis = PanAxis::none;
     setMouseCursor (juce::MouseCursor::NormalCursor);
 }
 
@@ -462,20 +470,45 @@ void PianoRollView::mouseExit (const juce::MouseEvent&)
 
 void PianoRollView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
+    // 诊断：cmd+shift+滚轮无响应排查，记录修饰键与 delta 原始值
+    debugLog ("wheel cmd=" + juce::String (e.mods.isCommandDown() ? 1 : 0)
+              + " shift=" + juce::String (e.mods.isShiftDown() ? 1 : 0)
+              + " dX=" + juce::String (wheel.deltaX, 4)
+              + " dY=" + juce::String (wheel.deltaY, 4)
+              + " smooth=" + juce::String (wheel.isSmooth ? 1 : 0)
+              + " x=" + juce::String (e.x));
+
     if (e.x < pianoKeyWidth)
         return;
 
+    // 操作逻辑与 Studio One 一致（docs/ara.md 第 6.5 节）：
+    // 滚轮上下滚动，Shift+滚轮左右滚动，Cmd+滚轮纵向缩放，Cmd+Shift+滚轮横向缩放。
+    // macOS 在按住 Shift 时把垂直滚轮转换成横向 delta（deltaY 恒为 0，滚动量在
+    // deltaX），鼠标路径取两者中非零的一个。
+    // delta 归一化为滚轮格数：JUCE 在 macOS 对鼠标滚轮的换算是 10/256（一格约
+    // 0.039），对触控板是 pixels × 0.5/256（120 像素折一格）
+    const float mouseDelta = wheel.deltaY != 0.0f ? wheel.deltaY : wheel.deltaX;
+    const double wheelNotches = wheel.isSmooth
+        ? static_cast<double> (wheel.deltaY) * 512.0 / 120.0
+        : static_cast<double> (mouseDelta) * 25.6;
+
+    if (e.mods.isCommandDown() && e.mods.isShiftDown())
+    {
+        // Cmd+Shift+滚轮：以光标为锚点横向缩放（时间轴），每格 1.25 倍
+        zoomHorizontalAt (e.x, std::pow (1.25, wheelNotches));
+        return;
+    }
+
     if (e.mods.isCommandDown())
     {
-        // Cmd+滚轮：以光标为锚点横向缩放
-        zoomHorizontalAt (e.x, std::pow (1.25, static_cast<double> (wheel.deltaY) * 4.0));
+        // Cmd+滚轮 / 触控板 Cmd+上下滑动：以光标为锚点纵向缩放（琴键高度）
+        zoomVerticalAt (e.y, std::pow (1.25, wheelNotches));
         return;
     }
 
     if (wheel.isSmooth)
     {
-        // 触控板双指：上下左右同时滚动两个轴。
-        // JUCE 在 macOS 对触控板 delta 的换算是 pixels × 0.5/256，乘 512 还原为 1:1 像素
+        // 触控板双指：上下左右同时滚动两个轴
         constexpr float kTrackpadPixelsPerDelta = 512.0f;
         if (wheel.deltaX != 0.0f)
         {
@@ -501,26 +534,24 @@ void PianoRollView::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
 
     if (e.mods.isShiftDown())
     {
-        // 鼠标 Shift+滚轮：纵向滚动
-        const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
-        verticalScrollOffset = juce::jlimit (0.0f, maxScroll,
-                                             verticalScrollOffset - wheel.deltaY * 120.0f);
-        updateScrollBarRange();
-        repaint();
+        // 鼠标 Shift+滚轮：横向滚动，每格 120 像素
+        const double newVisibleStart = timelineCamera.visibleStartSeconds
+            - wheelNotches * 120.0 / timelineCamera.pixelsPerSecond;
+        commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
+                                                    newVisibleStart,
+                                                    0.0,
+                                                    timelineCamera.pixelsPerSecond));
+        if (onUserViewportChanged)
+            onUserViewportChanged();
         return;
     }
 
-    // 鼠标滚轮：横向滚动
-    const float delta = std::abs (wheel.deltaX) > std::abs (wheel.deltaY)
-        ? wheel.deltaX : wheel.deltaY;
-    const double newVisibleStart = timelineCamera.visibleStartSeconds
-        - delta * 120.0 / timelineCamera.pixelsPerSecond;
-    commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
-                                                newVisibleStart,
-                                                0.0,
-                                                timelineCamera.pixelsPerSecond));
-    if (onUserViewportChanged)
-        onUserViewportChanged();
+    // 鼠标滚轮：纵向滚动，每格 120 像素
+    const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
+    verticalScrollOffset = juce::jlimit (0.0f, maxScroll,
+                                         verticalScrollOffset - static_cast<float> (wheelNotches * 120.0));
+    updateScrollBarRange();
+    repaint();
 }
 
 void PianoRollView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)

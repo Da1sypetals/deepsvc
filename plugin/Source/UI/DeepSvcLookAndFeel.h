@@ -51,6 +51,9 @@ public:
                           const juce::String& textToShow) override;
 
     juce::BorderSize<int> getLabelBorderSize (juce::Label&) override;
+
+    // 下拉框文字左侧留白（默认实现贴着左边框）
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override;
 };
 
 } // namespace deepsvc

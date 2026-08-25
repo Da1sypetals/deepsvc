@@ -9,6 +9,11 @@ namespace deepsvc
 ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     : apvts (state)
 {
+    // 标签文字显式使用主文字色，不依赖 LookAndFeel 颜色解析
+    for (auto* label : { &estimatorLabel, &stepsLabel, &pitchShiftLabel,
+                         &cfgLabel, &gainLabel, &vocoderLabel })
+        label->setColour (juce::Label::textColourId, UIColors::ink900);
+
     estimatorLabel.setText (juce::String (u8"F0 估计器"), juce::dontSendNotification);
     addAndMakeVisible (estimatorLabel);
     estimatorCombo.addItem ("RMVPE", 1);

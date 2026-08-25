@@ -396,6 +396,10 @@ DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modificati
     }
 
     slotContent.sourceAudio = mono;
+    // 源音频就绪属于内容变化：推进 revision，编辑器心跳会重新推送波形
+    ++content.contentRevision;
+    // 源音频就绪属于内容变化：推进 revision，编辑器心跳会重新推送波形
+    ++content.contentRevision;
     return mono;
 }
 
@@ -514,6 +518,23 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
     if (region.audioModificationPersistentId.isEmpty())
         region.audioModificationPersistentId = modification.persistentId;
     refreshRegisteredRenderers (publishModelChange());
+}
+
+// 对应 OpenTuneDocumentController.cpp 的 didEndEditing（第 1017 行）：
+// 文档编辑/恢复结束后物化所有内容的源音频，保证编辑器打开即有波形
+void DeepSvcDocumentController::didEndEditing (juce::ARADocument* document)
+{
+    juce::ignoreUnused (document);
+
+    for (auto& modification : audioModifications)
+    {
+        if (! modification.hasContentState())
+            continue;
+        if (modification.content->sourceWindow.sourcePersistentId.isEmpty())
+            continue;
+        ensureSourceAudio (modification, 0);
+        ensureSourceAudio (modification, 1);
+    }
 }
 
 void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource,

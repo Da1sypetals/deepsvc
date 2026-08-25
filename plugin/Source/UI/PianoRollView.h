@@ -97,6 +97,7 @@ private:
     void activateTimelineCamera (TimelineViewportCamera camera);
     void tryConsumeInitialF0View();
     void zoomHorizontalAt (int mouseX, double factor);
+    void zoomVerticalAt (int mouseY, double factor);
     float getTotalHeight() const;
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
 
@@ -140,9 +141,6 @@ private:
     juce::Point<int> panStartPos;
     double panStartVisibleStart = 0.0;
     float panStartVerticalOffset = 0.0f;
-    enum class PanAxis { none, horizontal, vertical };
-    PanAxis panAxis = PanAxis::none;
-
     // 光标坐标读出
     std::optional<juce::Point<int>> mousePosition;
 

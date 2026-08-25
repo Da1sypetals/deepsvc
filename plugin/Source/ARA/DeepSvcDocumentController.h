@@ -133,6 +133,7 @@ public:
     void didAddPlaybackRegionToAudioModification (juce::ARAAudioModification* audioModification,
                                                   juce::ARAPlaybackRegion* playbackRegion) override;
     void didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource, bool enable) override;
+    void didEndEditing (juce::ARADocument* document) override;
     void didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence) override;
     void didUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion) override;
     void willRemovePlaybackRegionFromAudioModification (juce::ARAAudioModification* audioModification,
