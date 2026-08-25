@@ -109,22 +109,45 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
 
     detectButton.getProperties().set ("primary", true);
     synthButton.getProperties().set ("primary", true);
-    compareButton.setClickingTogglesState (true);
-    compareButton.setTooltip (juce::String (u8"按下听原声，弹起听合成结果"));
 
     detectButton.onClick = [this] { startDetect(); };
     synthButton.onClick = [this] { startSynth(); };
     cancelButton.onClick = [this] { cancelJobs(); };
-    compareButton.onClick = [this]
+
+    // A/B 槽位切换（docs/ara.md 第 4.1 节）
+    slotAButton.setClickingTogglesState (true);
+    slotBButton.setClickingTogglesState (true);
+    slotAButton.setRadioGroupId (0x5A01);
+    slotBButton.setRadioGroupId (0x5A01);
+    slotAButton.onClick = [this] { switchToSlot (0); };
+    slotBButton.onClick = [this] { switchToSlot (1); };
+
+    bypassButton.setClickingTogglesState (true);
+    bypassButton.setTooltip (juce::String (u8"当前槽位直通原声"));
+    bypassButton.onClick = [this]
     {
         if (auto* dc = documentController())
-            dc->setAbBypass (compareButton.getToggleState());
+            if (presentedContentKey.isValid() && displayedSlot >= 0)
+                dc->setSlotBypass (presentedContentKey, displayedSlot, bypassButton.getToggleState());
     };
+
+    playbackIndicator.setFont (juce::Font (juce::FontOptions (12.0f)));
+    playbackIndicator.setColour (juce::Label::textColourId, UIColors::ink600);
+    playbackIndicator.setJustificationType (juce::Justification::centredLeft);
 
     addAndMakeVisible (detectButton);
     addAndMakeVisible (synthButton);
     addAndMakeVisible (cancelButton);
-    addAndMakeVisible (compareButton);
+    addAndMakeVisible (slotAButton);
+    addAndMakeVisible (slotBButton);
+    addAndMakeVisible (bypassButton);
+    addAndMakeVisible (playbackIndicator);
+
+    // APVTS 参数变化写回激活槽位（docs/ara.md 第 4.1 节）
+    for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
+                            &parameters::pitchShift, &parameters::cfgRate,
+                            &parameters::inputGainDb, &parameters::outputVocoder })
+        audioProcessor.apvts.addParameterListener (id->getParamID(), this);
 
     statusLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
     statusLabel.setColour (juce::Label::textColourId, UIColors::ink600);
@@ -147,12 +170,12 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
 
     overviewStrip.addListener (this);
 
-    // 音色选择随内容持久化
+    // 音色选择写入激活槽位并随内容持久化
     timbrePanel.onSelectionChanged = [this] (const juce::String& timbre)
     {
         if (auto* dc = documentController())
-            if (presentedContentKey.isValid() && timbre.isNotEmpty())
-                dc->applyTimbreFile (presentedContentKey, timbre);
+            if (presentedContentKey.isValid() && displayedSlot >= 0 && timbre.isNotEmpty())
+                dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
     };
 
     // 用户手动改变视口时记入会话记忆
@@ -180,6 +203,10 @@ DeepSvcEditor::~DeepSvcEditor()
 {
     debugLog ("editor destroyed");
     stopTimer();
+    for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
+                            &parameters::pitchShift, &parameters::cfgRate,
+                            &parameters::inputGainDb, &parameters::outputVocoder })
+        audioProcessor.apvts.removeParameterListener (id->getParamID(), this);
     overviewStrip.removeListener (this);
     setLookAndFeel (nullptr);
 }
@@ -198,12 +225,41 @@ void DeepSvcEditor::parentHierarchyChanged()
 {
     juce::AudioProcessorEditor::parentHierarchyChanged();
 
-    auto* parent = getParentComponent();
+    // 诊断：记录完整祖先链尺寸，定位容器错位发生在哪一层
+    juce::String chain;
+    for (const juce::Component* component = this; component != nullptr; component = component->getParentComponent())
+        chain += " [" + juce::String (component->getWidth()) + "x" + juce::String (component->getHeight())
+               + " @" + juce::String (component->getX()) + "," + juce::String (component->getY()) + "]";
+    if (auto* peer = getPeer())
+        chain += " peer=" + peer->getBounds().toString();
+
     debugLog ("editor parentChanged p=" + juce::String::toHexString (reinterpret_cast<int64_t> (&audioProcessor))
-              + " parent=" + (parent != nullptr
-                                  ? juce::String (parent->getWidth()) + "x" + juce::String (parent->getHeight())
-                                  : juce::String ("null"))
-              + " mySize=" + juce::String (getWidth()) + "x" + juce::String (getHeight()));
+              + " chain:" + chain);
+
+    reconcileParentSize();
+}
+
+// Studio One 按编辑器加入时的初始尺寸创建容器视图，之后容器不跟随面板；
+// 编辑器被宿主调整为面板实际尺寸后，把容器校正到同一尺寸，消除右侧与底部的黑色遮挡条
+void DeepSvcEditor::reconcileParentSize()
+{
+    if (reconcilingParentSize)
+        return;
+
+    auto* parent = getParentComponent();
+    if (parent == nullptr || getWidth() <= 0 || getHeight() <= 0)
+        return;
+
+    if (parent->getWidth() == getWidth() && parent->getHeight() == getHeight())
+        return;
+
+    reconcilingParentSize = true;
+    parent->setSize (getWidth(), getHeight());
+    reconcilingParentSize = false;
+
+    debugLog ("editor reconcileParent p=" + juce::String::toHexString (reinterpret_cast<int64_t> (&audioProcessor))
+              + " to=" + juce::String (getWidth()) + "x" + juce::String (getHeight())
+              + " parentNow=" + juce::String (parent->getWidth()) + "x" + juce::String (parent->getHeight()));
 }
 
 void DeepSvcEditor::resized()
@@ -218,6 +274,10 @@ void DeepSvcEditor::resized()
         lastEditorWidth = getWidth();
         lastEditorHeight = getHeight();
     }
+
+    // 宿主调整编辑器尺寸后，容器可能仍停留在旧尺寸，校正之
+    if (getPeer() != nullptr)
+        reconcileParentSize();
 
     auto bounds = getLocalBounds().reduced (8);
 
@@ -249,16 +309,21 @@ void DeepSvcEditor::resized()
                                  overviewHeight);
     }
 
-    // 底栏：左侧操作按钮，右侧状态
+    // 底栏：左侧操作按钮与 A/B 槽位，右侧状态（docs/ara.md 第 6.2 节）
     auto row = bar.reduced (0, (kBottomBarHeight - 28) / 2);
     detectButton.setBounds (row.removeFromLeft (88));
     row.removeFromLeft (8);
     synthButton.setBounds (row.removeFromLeft (88));
     row.removeFromLeft (8);
     cancelButton.setBounds (row.removeFromLeft (64));
-    row.removeFromLeft (8);
-    compareButton.setBounds (row.removeFromLeft (88));
     row.removeFromLeft (12);
+    slotAButton.setBounds (row.removeFromLeft (28));
+    slotBButton.setBounds (row.removeFromLeft (28));
+    row.removeFromLeft (8);
+    bypassButton.setBounds (row.removeFromLeft (56));
+    row.removeFromLeft (8);
+    playbackIndicator.setBounds (row.removeFromLeft (150));
+    row.removeFromLeft (8);
 
     progressBar.setBounds (row.removeFromRight (140));
     row.removeFromRight (8);
@@ -465,7 +530,9 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
         if (resolvedFromFocused)
             audioProcessor.setLastActivePianoRollPlacement (*activeIdentity);
 
-        timbrePanel.selectTimbre (dc->readTimbreFile (activeIdentity->contentKey));
+        // 切换音频块后按新内容的激活槽位同步界面
+        displayedSlot = -1;
+        syncUiFromActiveSlot();
 
         if (const auto restored = audioProcessor.readPianoRollViewport (*activeIdentity))
         {
@@ -511,24 +578,11 @@ void DeepSvcEditor::pushEditedContentData()
 
     if (const auto* content = dc->findContent (presentedContentKey))
     {
-        f0Times = content->f0Times;
-        f0Values = content->f0Values;
-
-        const bool hasRendered = content->renderedAudio != nullptr
-            && ! content->renderedAudio->empty();
-        if (dc->isAbBypass() && hasRendered)
-        {
-            // 对比原声态显示合成结果的波形
-            auto rendered = std::make_shared<juce::AudioBuffer<float>> (
-                1, static_cast<int> (content->renderedAudio->size()));
-            rendered->copyFrom (0, 0, content->renderedAudio->data(),
-                                static_cast<int> (content->renderedAudio->size()));
-            audio = std::move (rendered);
-        }
-        else
-        {
-            audio = dc->readSourceAudio (presentedContentKey);
-        }
+        // 钢琴卷永远显示激活槽位的原音频波形与原音频音高（docs/ara.md 第 6.5 节）
+        const auto& slot = content->active();
+        f0Times = slot.f0Times;
+        f0Values = slot.f0Values;
+        audio = slot.sourceAudio;
     }
 
     pianoRoll.updateEditedContentData (std::move (audio), std::move (f0Times),
@@ -542,20 +596,32 @@ void DeepSvcEditor::updateJobStatusDisplay()
     JobStatus status;
     bool hasRendered = false;
     bool stale = false;
+    bool slotBypass = false;
+    juce::String playbackText;
+
     if (dc != nullptr && presentedContentKey.isValid())
     {
-        status = dc->jobStatusFor (presentedContentKey);
         if (const auto* content = dc->findContent (presentedContentKey))
         {
-            hasRendered = content->renderedAudio != nullptr && ! content->renderedAudio->empty();
-            if (hasRendered && content->renderedFingerprint.isNotEmpty())
-            {
-                // 参数或音色与上次合成不一致：结果失效
-                const auto current = DeepSvcDocumentController::makeFingerprint (
-                    parameters::makeSynthParams (audioProcessor.apvts),
-                    timbrePanel.selectedTimbre());
-                stale = content->renderedFingerprint != current;
-            }
+            // 激活槽位被外部改变（归档恢复等）时重新同步界面
+            if (displayedSlot != content->activeSlot)
+                syncUiFromActiveSlot();
+
+            const auto& slot = content->active();
+            status = dc->jobStatusFor (presentedContentKey, content->activeSlot);
+            hasRendered = slot.hasRenderedAudio();
+            slotBypass = slot.bypass;
+
+            // 参数或音色与上次合成不一致：结果失效
+            stale = hasRendered
+                && (slot.synthParams != slot.params || slot.synthTimbreFile != slot.timbreFile);
+
+            // 回放指示（docs/ara.md 第 6.7 节）
+            if (slotBypass || ! hasRendered)
+                playbackText = juce::String (u8"原声");
+            else
+                playbackText = juce::String (u8"合成 · 声码器 level ")
+                    + juce::String (slot.synthParams.keepFirstVocoderOutput ? 1 : 2);
         }
     }
 
@@ -565,9 +631,11 @@ void DeepSvcEditor::updateJobStatusDisplay()
     detectButton.setEnabled (hasContent && ! active);
     synthButton.setEnabled (hasContent && ! active);
     cancelButton.setEnabled (hasContent && active);
-    compareButton.setEnabled (hasRendered && ! active);
-    if (dc != nullptr)
-        compareButton.setToggleState (dc->isAbBypass(), juce::dontSendNotification);
+    slotAButton.setEnabled (hasContent);
+    slotBButton.setEnabled (hasContent);
+    bypassButton.setEnabled (hasContent && ! active);
+    bypassButton.setToggleState (slotBypass, juce::dontSendNotification);
+    playbackIndicator.setText (playbackText, juce::dontSendNotification);
 
     auto text = jobStateText (status);
     auto colour = UIColors::ink600;
@@ -618,14 +686,11 @@ void DeepSvcEditor::startDetect()
         return;
 
     auto* dc = documentController();
-    if (dc == nullptr)
+    if (dc == nullptr || displayedSlot < 0)
         return;
 
     const auto estimator = parameters::makeSynthParams (audioProcessor.apvts).f0Estimator;
-    dc->requestDetect (presentedContentKey,
-                       presentedPlacementIdentity->projection.contentStartSeconds,
-                       presentedPlacementIdentity->projection.contentDurationSeconds,
-                       estimator);
+    dc->requestDetect (presentedContentKey, displayedSlot, estimator);
 }
 
 void DeepSvcEditor::startSynth()
@@ -634,7 +699,7 @@ void DeepSvcEditor::startSynth()
         return;
 
     auto* dc = documentController();
-    if (dc == nullptr)
+    if (dc == nullptr || displayedSlot < 0)
         return;
 
     const auto timbre = timbrePanel.selectedTimbre();
@@ -646,18 +711,69 @@ void DeepSvcEditor::startSynth()
     }
 
     const auto params = parameters::makeSynthParams (audioProcessor.apvts);
-    dc->applyTimbreFile (presentedContentKey, timbre);
-    dc->requestSynth (presentedContentKey,
+    dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
+    dc->requestSynth (presentedContentKey, displayedSlot,
                       timbreLibrary.fileFor (timbre).getFullPathName(),
-                      params,
-                      DeepSvcDocumentController::makeFingerprint (params, timbre));
+                      params);
 }
 
 void DeepSvcEditor::cancelJobs()
 {
     if (auto* dc = documentController())
-        if (presentedContentKey.isValid())
-            dc->cancelJobs (presentedContentKey);
+        if (presentedContentKey.isValid() && displayedSlot >= 0)
+            dc->cancelJobs (presentedContentKey, displayedSlot);
+}
+
+void DeepSvcEditor::switchToSlot (int slot)
+{
+    auto* dc = documentController();
+    if (dc == nullptr || ! presentedContentKey.isValid())
+        return;
+
+    dc->setActiveSlot (presentedContentKey, slot);
+    syncUiFromActiveSlot();
+}
+
+void DeepSvcEditor::syncUiFromActiveSlot()
+{
+    auto* dc = documentController();
+    if (dc == nullptr || ! presentedContentKey.isValid())
+        return;
+
+    const auto* content = dc->findContent (presentedContentKey);
+    if (content == nullptr)
+        return;
+
+    displayedSlot = content->activeSlot;
+    const auto& slot = content->active();
+
+    slotAButton.setToggleState (displayedSlot == 0, juce::dontSendNotification);
+    slotBButton.setToggleState (displayedSlot == 1, juce::dontSendNotification);
+    bypassButton.setToggleState (slot.bypass, juce::dontSendNotification);
+    timbrePanel.selectTimbre (slot.timbreFile);
+
+    // 槽位参数推回 APVTS，参数面板显示激活槽位的值
+    syncingParamsFromSlot = true;
+    parameters::pushSynthParamsToApvts (audioProcessor.apvts, slot.params);
+    syncingParamsFromSlot = false;
+}
+
+void DeepSvcEditor::parameterChanged (const juce::String&, float)
+{
+    if (syncingParamsFromSlot)
+        return;
+
+    // 宿主自动化可能在任意线程触发；槽位写回只在消息线程做
+    if (! juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        juce::MessageManager::callAsync ([this] { parameterChanged ({}, 0.0f); });
+        return;
+    }
+
+    if (auto* dc = documentController())
+        if (presentedContentKey.isValid() && displayedSlot >= 0)
+            dc->applySlotParams (presentedContentKey, displayedSlot,
+                                 parameters::makeSynthParams (audioProcessor.apvts));
 }
 
 } // namespace deepsvc

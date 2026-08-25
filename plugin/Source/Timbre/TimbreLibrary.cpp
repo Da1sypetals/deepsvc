@@ -1,5 +1,8 @@
 #include "TimbreLibrary.h"
 
+// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
+// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
+// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
 namespace deepsvc
 {
 

@@ -2,6 +2,9 @@
 
 #include <cmath>
 
+// 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
+// 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
+// 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
 namespace deepsvc::parameters
 {
 
@@ -60,6 +63,52 @@ EngineSynthParams makeSynthParams (const juce::AudioProcessorValueTreeState& sta
     if (const auto* vocoder = state.getRawParameterValue (outputVocoder.getParamID()))
         params.keepFirstVocoderOutput = static_cast<int> (vocoder->load()) == 0;
 
+    return params;
+}
+
+void pushSynthParamsToApvts (juce::AudioProcessorValueTreeState& state, const EngineSynthParams& params)
+{
+    const auto setValue = [&state] (const juce::ParameterID& id, float plainValue)
+    {
+        if (auto* parameter = state.getParameter (id.getParamID()))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+
+    setValue (f0Estimator, params.f0Estimator == EngineEstimator::fcpe ? 1.0f : 0.0f);
+    setValue (diffusionSteps, static_cast<float> (params.diffusionSteps));
+    setValue (pitchShift, params.pitchShift);
+    setValue (cfgRate, params.cfgRate);
+    setValue (inputGainDb, params.inputGainDb);
+    setValue (outputVocoder, params.keepFirstVocoderOutput ? 0.0f : 1.0f);
+}
+
+juce::var synthParamsToJson (const EngineSynthParams& params)
+{
+    auto* object = new juce::DynamicObject();
+    object->setProperty ("estimator", params.f0Estimator == EngineEstimator::fcpe ? 1 : 0);
+    object->setProperty ("diffusionSteps", static_cast<int> (params.diffusionSteps));
+    object->setProperty ("pitchShift", static_cast<double> (params.pitchShift));
+    object->setProperty ("cfgRate", static_cast<double> (params.cfgRate));
+    object->setProperty ("inputGainDb", static_cast<double> (params.inputGainDb));
+    object->setProperty ("outputVocoder", params.keepFirstVocoderOutput ? 0 : 1);
+    return juce::var (object);
+}
+
+EngineSynthParams synthParamsFromJson (const juce::var& json)
+{
+    EngineSynthParams params;
+    params.f0Estimator = static_cast<int> (json.getProperty ("estimator", 0)) == 1
+        ? EngineEstimator::fcpe
+        : EngineEstimator::rmvpe;
+    params.diffusionSteps = static_cast<uint32_t> (juce::jlimit (
+        1, 64, static_cast<int> (json.getProperty ("diffusionSteps", 16))));
+    params.pitchShift = static_cast<float> (juce::jlimit (
+        -24.0, 24.0, static_cast<double> (json.getProperty ("pitchShift", 12.0))));
+    params.cfgRate = static_cast<float> (juce::jlimit (
+        0.0, 2.0, static_cast<double> (json.getProperty ("cfgRate", 0.9))));
+    params.inputGainDb = static_cast<float> (juce::jlimit (
+        -12.0, 3.0, static_cast<double> (json.getProperty ("inputGainDb", -2.0))));
+    params.keepFirstVocoderOutput = static_cast<int> (json.getProperty ("outputVocoder", 1)) == 0;
     return params;
 }
 

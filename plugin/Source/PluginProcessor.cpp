@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "ARA/DeepSvcDocumentController.h"
+#include "ARA/DeepSvcPlaybackRenderer.h"
 #include "DebugLog.h"
 #include "Plugin/PluginEditor.h"
 
@@ -22,14 +23,19 @@ DeepSvcAudioProcessor::~DeepSvcAudioProcessor()
     debugLog ("processor destroyed p=" + juce::String::toHexString (reinterpret_cast<int64_t> (this)));
 }
 
-void DeepSvcAudioProcessor::prepareToPlay (double, int)
+void DeepSvcAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     playHeadState.reset();
+    prepareToPlayForARA (sampleRate,
+                         samplesPerBlock,
+                         getMainBusNumOutputChannels(),
+                         getProcessingPrecision());
 }
 
 void DeepSvcAudioProcessor::releaseResources()
 {
     playHeadState.reset();
+    releaseResourcesForARA();
 }
 
 bool DeepSvcAudioProcessor::isBusesLayoutSupported (const BusesLayout&) const
@@ -64,6 +70,19 @@ void DeepSvcAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // 未绑定 ARA：直通
+}
+
+void DeepSvcAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer,
+                                                  juce::MidiBuffer& midiMessages)
+{
+    juce::ScopedNoDenormals noDenormals;
+    juce::ignoreUnused (midiMessages);
+
+    // 宿主旁通：由回放渲染器渲染源音频（docs/ara.md 第 4.3 节）；
+    // 无可用源音频时保持宿主输入不变
+    if (isBoundToARA())
+        if (auto* renderer = getPlaybackRenderer<DeepSvcPlaybackRenderer>())
+            renderer->renderSourcePassthrough (buffer, getPlayHead());
 }
 
 void DeepSvcAudioProcessor::didBindToARA() noexcept

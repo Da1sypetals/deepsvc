@@ -1,12 +1,14 @@
 #include "DeepSvcPlaybackRenderer.h"
 
 #include "DeepSvcDocumentController.h"
-#include "../DebugLog.h"
 
 #include <algorithm>
 
 // 对应 OpenTune Source/ARA/OpenTunePlaybackRenderer.cpp
 namespace deepsvc
+{
+
+namespace
 {
 
 bool shouldRenderAraPlaybackBlock (juce::AudioProcessor::Realtime realtime,
@@ -18,35 +20,27 @@ bool shouldRenderAraPlaybackBlock (juce::AudioProcessor::Realtime realtime,
     return rendererIsPlaying;
 }
 
-namespace
-{
-
-juce::ARAPlaybackRegion* toJucePlaybackRegion (ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
-{
-    return static_cast<juce::ARAPlaybackRegion*> (playbackRegion);
-}
-
-// 从 44.1kHz 单声道合成音频读取 content 时间处的样本（线性插值）
-float readRenderedSample (const std::vector<float>& audio, double contentSeconds) noexcept
+// 从 44.1kHz 单声道数据读取 content 时间处的样本（线性插值）
+float readContentSample (const float* data, size_t numSamples, double contentSeconds) noexcept
 {
     const double position = contentSeconds * TimeCoordinate::kRenderSampleRate;
-    if (position < 0.0 || audio.empty())
+    if (position < 0.0 || numSamples == 0)
         return 0.0f;
 
     const auto index = static_cast<size_t> (position);
-    if (index + 1 >= audio.size())
-        return index < audio.size() ? audio[index] : 0.0f;
+    if (index + 1 >= numSamples)
+        return index < numSamples ? data[index] : 0.0f;
 
     const float fraction = static_cast<float> (position - static_cast<double> (index));
-    return audio[index] * (1.0f - fraction) + audio[index + 1] * fraction;
+    return data[index] * (1.0f - fraction) + data[index + 1] * fraction;
 }
 
 } // namespace
 
-DeepSvcPlaybackRenderer::DeepSvcPlaybackRenderer (ARA::PlugIn::DocumentController* araDc,
-                                                  DeepSvcDocumentController* docController)
-    : juce::ARAPlaybackRenderer (araDc)
-    , documentController (docController)
+DeepSvcPlaybackRenderer::DeepSvcPlaybackRenderer (ARA::PlugIn::DocumentController* araDocumentController,
+                                                  DeepSvcDocumentController* deepSvcDocumentControllerRef)
+    : juce::ARAPlaybackRenderer (araDocumentController)
+    , documentController (deepSvcDocumentControllerRef)
 {
 }
 
@@ -54,111 +48,55 @@ DeepSvcPlaybackRenderer::~DeepSvcPlaybackRenderer()
 {
     if (documentController != nullptr)
         documentController->unregisterPlaybackRenderer (*this);
+    storeRenderPlan ({});
 }
 
 void DeepSvcPlaybackRenderer::detachDocumentController (DeepSvcDocumentController& owner)
 {
     if (documentController == &owner)
     {
-        std::atomic_store_explicit (&currentPlan,
-                                    std::shared_ptr<const RenderPlan> (std::make_shared<RenderPlan>()),
-                                    std::memory_order_release);
+        storeRenderPlan ({});
         documentController = nullptr;
     }
 }
 
 std::vector<juce::ARAPlaybackRegion*> DeepSvcPlaybackRenderer::assignedPlaybackRegions() const
 {
-    if (const auto plan = std::atomic_load_explicit (&currentPlan, std::memory_order_acquire))
-        return plan->playbackRegions;
-    return {};
+    return getPlaybackRegions<juce::ARAPlaybackRegion>();
 }
 
-void DeepSvcPlaybackRenderer::didAddPlaybackRegion (ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
+void DeepSvcPlaybackRenderer::didAddPlaybackRegion (ARA::PlugIn::PlaybackRegion*) noexcept
 {
-    auto* jucePlaybackRegion = toJucePlaybackRegion (playbackRegion);
-    auto plan = std::atomic_load_explicit (&currentPlan, std::memory_order_acquire);
-    auto regions = plan != nullptr ? plan->playbackRegions : std::vector<juce::ARAPlaybackRegion*> {};
-    if (jucePlaybackRegion != nullptr
-        && std::find (regions.begin(), regions.end(), jucePlaybackRegion) == regions.end())
-        regions.push_back (jucePlaybackRegion);
-
-    debugLog ("renderer didAddPlaybackRegion r=" + juce::String::toHexString (reinterpret_cast<int64_t> (this))
-              + " total=" + juce::String (regions.size()));
-    publishRenderPlanFor (std::move (regions));
+    refreshFromDocument();
 }
 
-void DeepSvcPlaybackRenderer::willRemovePlaybackRegion (ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
+void DeepSvcPlaybackRenderer::willRemovePlaybackRegion (ARA::PlugIn::PlaybackRegion*) noexcept
 {
-    auto* jucePlaybackRegion = toJucePlaybackRegion (playbackRegion);
-    auto plan = std::atomic_load_explicit (&currentPlan, std::memory_order_acquire);
-    auto regions = plan != nullptr ? plan->playbackRegions : std::vector<juce::ARAPlaybackRegion*> {};
-    regions.erase (std::remove (regions.begin(), regions.end(), jucePlaybackRegion), regions.end());
-    debugLog ("renderer willRemovePlaybackRegion total=" + juce::String (regions.size()));
-    publishRenderPlanFor (std::move (regions));
+    refreshFromDocument();
 }
 
-void DeepSvcPlaybackRenderer::refreshRenderPlanFromDocument()
+void DeepSvcPlaybackRenderer::refreshFromDocument()
 {
-    auto plan = std::atomic_load_explicit (&currentPlan, std::memory_order_acquire);
-    publishRenderPlanFor (plan != nullptr ? plan->playbackRegions
-                                          : std::vector<juce::ARAPlaybackRegion*> {});
-}
-
-std::shared_ptr<const DeepSvcPlaybackRenderer::RenderPlan>
-DeepSvcPlaybackRenderer::buildRenderPlan (std::vector<juce::ARAPlaybackRegion*> regions) const
-{
-    auto nextPlan = std::make_shared<RenderPlan>();
-    nextPlan->playbackRegions = std::move (regions);
-    if (documentController == nullptr)
-        return nextPlan;
-
-    nextPlan->abBypass = documentController->isAbBypass();
-
-    const auto projections = documentController->getPlaybackRegionProjectionsFor (nextPlan->playbackRegions);
-    nextPlan->items.reserve (projections.size());
-
-    for (const auto& projection : projections)
-    {
-        if (! projection.isPlaybackRenderable())
-            continue;
-
-        const auto* content = documentController->findContent (projection.contentKey);
-        if (content == nullptr || content->renderedAudio == nullptr)
-            continue;
-
-        PlaybackRegionRenderItem item;
-        item.projection = projection.toTimelineProjection();
-        item.renderedAudio = content->renderedAudio;
-        item.contentDurationSeconds = projection.contentDurationSeconds;
-        nextPlan->items.push_back (std::move (item));
-    }
-
-    return nextPlan;
-}
-
-void DeepSvcPlaybackRenderer::publishRenderPlanFor (std::vector<juce::ARAPlaybackRegion*> regions)
-{
-    std::atomic_store_explicit (&currentPlan, buildRenderPlan (std::move (regions)),
-                                std::memory_order_release);
+    if (documentController != nullptr)
+        storeRenderPlan (buildRenderPlan());
 }
 
 void DeepSvcPlaybackRenderer::prepareToPlay (double sampleRate,
-                                             int maximumSamplesPerBlockCount,
-                                             int numChannelsCount,
+                                             int maximumExpectedSamplesPerBlock,
+                                             int numChannels,
                                              juce::AudioProcessor::ProcessingPrecision precision,
                                              AlwaysNonRealtime alwaysNonRealtime)
 {
     juce::ignoreUnused (precision, alwaysNonRealtime);
 
     hostSampleRate = sampleRate;
-    numChannels = numChannelsCount;
-    maximumSamplesPerBlock = maximumSamplesPerBlockCount;
     renderBuffer.setSize (juce::jmax (1, numChannels),
-                          juce::jmax (1, maximumSamplesPerBlock),
-                          false, true, true);
+                          juce::jmax (1, maximumExpectedSamplesPerBlock),
+                          false,
+                          true,
+                          true);
 
-    // 直通与渲染输出之间的交叉淡入窗口：10ms
+    // 直通 ↔ 渲染切换的交叉淡化窗口：10ms
     crossfadeTotal = juce::jlimit (128, 2048, static_cast<int> (sampleRate * 0.01));
     crossfadeRemaining = 0;
     outputMode = RenderOutputMode::passthrough;
@@ -174,15 +112,22 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
                                             const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
     const int numSamples = buffer.getNumSamples();
+    if (numSamples <= 0)
+        return true;
 
-    const auto plan = std::atomic_load_explicit (&currentPlan, std::memory_order_acquire);
+    const auto plan = loadRenderPlan();
     const auto positionTime = positionInfo.getTimeInSeconds();
 
-    const bool hasRenderContent = plan != nullptr && ! plan->items.empty()
-        && ! plan->abBypass && positionTime.hasValue();
-    const bool wantRender = hasRenderContent
+    bool planHasRenderedAudio = false;
+    if (plan != nullptr)
+        for (const auto& item : plan->items)
+            planHasRenderedAudio = planHasRenderedAudio || item.audio != nullptr;
+
+    const bool wantRender = planHasRenderedAudio
+        && positionTime.hasValue()
         && shouldRenderAraPlaybackBlock (realtime, positionInfo.getIsPlaying());
 
+    // 模式切换时开启交叉淡化窗口，直通与渲染内容之间的切换无爆音
     if (wantRender != (outputMode == RenderOutputMode::rendering))
     {
         outputMode = wantRender ? RenderOutputMode::rendering : RenderOutputMode::passthrough;
@@ -191,6 +136,7 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
 
     const bool inTransition = crossfadeRemaining > 0;
 
+    // 纯直通：宿主输入保持不变
     if (outputMode == RenderOutputMode::passthrough && ! inTransition)
         return true;
 
@@ -198,54 +144,32 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     {
         renderBuffer.clear();
         if (plan != nullptr && positionTime.hasValue())
-        {
-            const double blockStartSeconds = *positionTime;
-            for (const auto& region : plan->items)
-            {
-                const auto overlap = computeRegionBlockRenderSpan (blockStartSeconds,
-                                                                   numSamples,
-                                                                   hostSampleRate,
-                                                                   region.projection.timelineStartSeconds,
-                                                                   region.endInPlaybackTime());
-                if (! overlap.has_value() || region.renderedAudio == nullptr)
-                    continue;
-
-                const auto& audio = *region.renderedAudio;
-                for (int sample = 0; sample < overlap->samplesToCopy; ++sample)
-                {
-                    const double playbackTime = overlap->overlapStartSeconds
-                        + static_cast<double> (sample) / hostSampleRate;
-                    const double contentTime = region.projection.projectTimelineTimeToContent (playbackTime);
-                    const float value = readRenderedSample (audio, contentTime);
-
-                    const int destination = overlap->destinationStartSample + sample;
-                    const int channels = juce::jmin (renderBuffer.getNumChannels(), buffer.getNumChannels());
-                    for (int channel = 0; channel < channels; ++channel)
-                        renderBuffer.getWritePointer (channel)[destination] += value;
-                }
-            }
-        }
+            renderItems (*plan, renderBuffer, *positionTime, numSamples, false);
     }
 
     if (inTransition)
     {
-        // 淡出方向需要渲染信号参与交叉。宿主停止后若不再提供有效时间，
-        // 渲染内容不可得，此时宿主输入通常已为静音，直接直通输入。
+        // 淡出方向需要渲染信号参与交叉；宿主停止后位置信息缺失，渲染内容不可得，
+        // 此时宿主输入通常已为静音，直接直通输入
         if (outputMode == RenderOutputMode::passthrough && ! positionTime.hasValue())
         {
             crossfadeRemaining = 0;
             return true;
         }
 
+        // output = input * (1 - renderWeight) + render * renderWeight
+        // 淡入 renderWeight 0→1，淡出 1→0；窗口最后一帧强制到达终点值
         const int fadeSamples = juce::jmin (crossfadeRemaining, numSamples);
         const int elapsedBase = crossfadeTotal - crossfadeRemaining;
         const bool fadingIntoRender = (outputMode == RenderOutputMode::rendering);
         const int channels = juce::jmin (buffer.getNumChannels(), renderBuffer.getNumChannels());
+
         for (int channel = 0; channel < channels; ++channel)
         {
             auto* out = buffer.getWritePointer (channel);
             const auto* in = buffer.getReadPointer (channel);
             const auto* render = renderBuffer.getReadPointer (channel);
+
             for (int sample = 0; sample < fadeSamples; ++sample)
             {
                 const int windowFrame = elapsedBase + sample;
@@ -258,6 +182,7 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         }
         crossfadeRemaining -= fadeSamples;
 
+        // 淡化窗口之后的剩余部分
         if (fadeSamples < numSamples && outputMode == RenderOutputMode::rendering)
         {
             for (int channel = 0; channel < channels; ++channel)
@@ -267,6 +192,7 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
                 juce::FloatVectorOperations::copy (out, render, numSamples - fadeSamples);
             }
         }
+        // 直通方向：剩余部分保持宿主输入
         return true;
     }
 
@@ -274,10 +200,163 @@ bool DeepSvcPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     buffer.clear();
     const int channels = juce::jmin (buffer.getNumChannels(), renderBuffer.getNumChannels());
     for (int channel = 0; channel < channels; ++channel)
-        juce::FloatVectorOperations::copy (buffer.getWritePointer (channel),
-                                           renderBuffer.getReadPointer (channel),
-                                           numSamples);
+    {
+        auto* out = buffer.getWritePointer (channel);
+        const auto* render = renderBuffer.getReadPointer (channel);
+        for (int sample = 0; sample < numSamples; ++sample)
+            out[sample] += render[sample];
+    }
     return true;
+}
+
+void DeepSvcPlaybackRenderer::renderSourcePassthrough (juce::AudioBuffer<float>& buffer,
+                                                       const juce::AudioPlayHead* playhead) noexcept
+{
+    const int numSamples = buffer.getNumSamples();
+    if (numSamples <= 0 || playhead == nullptr)
+        return;
+
+    const auto positionInfo = playhead->getPosition();
+    const auto positionTime = positionInfo.hasValue() ? positionInfo->getTimeInSeconds()
+                                                      : juce::Optional<double>();
+    if (! positionTime.hasValue())
+        return;
+
+    const auto plan = loadRenderPlan();
+    if (plan == nullptr)
+        return;
+
+    renderBuffer.clear();
+    if (! renderItems (*plan, renderBuffer, *positionTime, numSamples, true))
+        return;
+
+    buffer.clear();
+    const int channels = juce::jmin (buffer.getNumChannels(), renderBuffer.getNumChannels());
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        auto* out = buffer.getWritePointer (channel);
+        const auto* render = renderBuffer.getReadPointer (channel);
+        for (int sample = 0; sample < numSamples; ++sample)
+            out[sample] += render[sample];
+    }
+}
+
+bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
+                                           juce::AudioBuffer<float>& output,
+                                           double blockStartSeconds,
+                                           int numSamples,
+                                           bool useSourceAudio) noexcept
+{
+    bool renderedAny = false;
+    const double blockEndSeconds = blockStartSeconds
+        + static_cast<double> (numSamples) / hostSampleRate;
+
+    for (const auto& item : plan.items)
+    {
+        const double itemEnd = item.timelineStartSeconds + item.timelineDurationSeconds;
+        const double overlapStart = std::max (blockStartSeconds, item.timelineStartSeconds);
+        const double overlapEnd = std::min (blockEndSeconds, itemEnd);
+        if (overlapEnd <= overlapStart)
+            continue;
+
+        const float* audioData = nullptr;
+        size_t audioNumSamples = 0;
+        if (useSourceAudio)
+        {
+            if (item.sourceAudio != nullptr && item.sourceAudio->getNumSamples() > 0)
+            {
+                audioData = item.sourceAudio->getReadPointer (0);
+                audioNumSamples = static_cast<size_t> (item.sourceAudio->getNumSamples());
+            }
+        }
+        else if (item.audio != nullptr)
+        {
+            audioData = item.audio->data();
+            audioNumSamples = item.audio->size();
+        }
+        if (audioData == nullptr)
+            continue;
+
+        const int destinationStart = static_cast<int> (
+            (overlapStart - blockStartSeconds) * hostSampleRate);
+        const int samplesToCopy = juce::jmin (
+            static_cast<int> ((overlapEnd - overlapStart) * hostSampleRate),
+            numSamples - destinationStart);
+        if (samplesToCopy <= 0)
+            continue;
+
+        renderedAny = true;
+        // 时间伸缩：content 时间 = contentStart + (playback - timelineStart) * 伸缩比
+        const double contentRatio = item.timelineDurationSeconds > 0.0
+            ? item.contentDurationSeconds / item.timelineDurationSeconds
+            : 1.0;
+
+        const int channels = output.getNumChannels();
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            auto* dest = output.getWritePointer (channel);
+            for (int sample = 0; sample < samplesToCopy; ++sample)
+            {
+                const double playbackTime = overlapStart
+                    + static_cast<double> (sample) / hostSampleRate;
+                const double contentTime = item.contentStartSeconds
+                    + (playbackTime - item.timelineStartSeconds) * contentRatio;
+                dest[destinationStart + sample] += readContentSample (audioData, audioNumSamples, contentTime);
+            }
+        }
+    }
+    return renderedAny;
+}
+
+std::shared_ptr<const DeepSvcPlaybackRenderer::RenderPlan>
+DeepSvcPlaybackRenderer::loadRenderPlan() const noexcept
+{
+    return std::atomic_load_explicit (&renderPlan, std::memory_order_acquire);
+}
+
+void DeepSvcPlaybackRenderer::storeRenderPlan (const std::shared_ptr<const RenderPlan>& plan) noexcept
+{
+    std::atomic_store_explicit (&renderPlan, plan, std::memory_order_release);
+}
+
+std::shared_ptr<const DeepSvcPlaybackRenderer::RenderPlan>
+DeepSvcPlaybackRenderer::buildRenderPlan() const
+{
+    auto nextPlan = std::make_shared<RenderPlan>();
+
+    if (documentController == nullptr)
+        return nextPlan;
+
+    const auto regions = getPlaybackRegions<juce::ARAPlaybackRegion>();
+    const auto projections = documentController->getPlaybackRegionProjectionsFor (regions);
+    nextPlan->items.reserve (projections.size());
+
+    for (const auto& projection : projections)
+    {
+        if (! projection.hasValidPlacement() || ! projection.contentKey.isValid())
+            continue;
+
+        const auto* content = documentController->findContent (projection.contentKey);
+        if (content == nullptr)
+            continue;
+
+        const auto& slot = content->active();
+
+        RenderItem item;
+        item.contentKey = projection.contentKey;
+        item.sourceAudio = slot.sourceAudio;
+        // 激活槽位有合成结果且未旁通时回放合成音频
+        if (slot.hasRenderedAudio() && ! slot.bypass)
+            item.audio = slot.renderedAudio;
+        item.timelineStartSeconds = projection.startInPlaybackTime;
+        item.timelineDurationSeconds = projection.durationInPlaybackTime;
+        item.contentStartSeconds = projection.startInModificationTime;
+        item.contentDurationSeconds = projection.durationInModificationTime;
+        item.contentTotalSeconds = projection.contentDurationSeconds;
+        nextPlan->items.push_back (std::move (item));
+    }
+
+    return nextPlan;
 }
 
 } // namespace deepsvc

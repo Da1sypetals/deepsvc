@@ -3,9 +3,11 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "../DebugLog.h"
+#include "../State/Parameters.h"
 #include "../Utils/TimeCoordinate.h"
 #include "DeepSvcEditorView.h"
 #include "DeepSvcPlaybackRenderer.h"
@@ -16,47 +18,43 @@ namespace deepsvc
 
 namespace
 {
-
-constexpr int kArchiveMagic = 0x44535643;  // 'DSVC'
-constexpr int kArchiveVersion = 0;
-constexpr int kMaxArchiveRecords = 65536;
-
-// f0 帧率：16kHz 采样、hop 160，即 100fps
-constexpr double kF0FrameSeconds = 0.01;
-
-// 归档中的 persistentID 经恢复过滤器映射为当前文档中的 ID
-juce::String mapRestoredPersistentId (const juce::String& archivedPersistentId,
-                                      const juce::ARARestoreObjectsFilter* filter)
+// 诊断：把合成链路中的音频落盘为 WAV，用于定位「电音」问题
+void dumpDebugWav (const juce::String& name, const float* data, size_t numSamples)
 {
-    if (archivedPersistentId.isEmpty())
-        return {};
+    if (data == nullptr || numSamples == 0)
+        return;
 
-    if (filter == nullptr)
-        return archivedPersistentId;
+    auto dir = directories::applicationSupport().getChildFile ("debug_audio");
+    dir.createDirectory();
+    auto file = dir.getChildFile (name + ".wav");
+    file.deleteFile();
 
-    auto* audioModification = filter->getAudioModificationToRestoreStateWithID (
-        archivedPersistentId.toRawUTF8());
-    if (audioModification == nullptr)
-        return {};
+    juce::WavAudioFormat format;
+    auto stream = file.createOutputStream();
+    if (stream == nullptr)
+        return;
 
-    const auto& restoredPersistentId = audioModification->getPersistentID();
-    return restoredPersistentId.empty() ? juce::String()
-                                        : juce::String::fromUTF8 (restoredPersistentId.c_str());
+    std::unique_ptr<juce::AudioFormatWriter> writer (
+        format.createWriterFor (stream.get(), TimeCoordinate::kRenderSampleRate, 1, 24, {}, 0));
+    if (writer == nullptr)
+        return;
+
+    stream.release();
+    const float* const channels[] = { data };
+    writer->writeFromFloatArrays (channels, 1, static_cast<int> (numSamples));
 }
-
 } // namespace
 
-DeepSvcDocumentController::DeepSvcDocumentController (
-    const ARA::PlugIn::PlugInEntry* entry,
-    const ARA::ARADocumentControllerHostInstance* instance)
-    : juce::ARADocumentControllerSpecialisation (entry, instance)
+DeepSvcDocumentController::DeepSvcDocumentController (const ARA::PlugIn::PlugInEntry* entry,
+                                                      const ARA::ARADocumentControllerHostInstance* instance)
+    : ARADocumentControllerSpecialisation (entry, instance)
     , jobManager (*this)
 {
 }
 
 DeepSvcDocumentController::~DeepSvcDocumentController()
 {
-    // 渲染器生命周期由 DC 驱动：先解除所有渲染器对 DC 的引用
+    // 渲染器生命周期由宿主掌握，可能晚于 DC：先解除所有渲染器对 DC 的引用
     for (auto* renderer : playbackRenderers)
         if (renderer != nullptr)
             renderer->detachDocumentController (*this);
@@ -76,17 +74,11 @@ std::vector<DeepSvcDocumentController::PlaybackRegionProjection>
 DeepSvcDocumentController::getPlaybackRegionProjectionsFor (
     const std::vector<juce::ARAPlaybackRegion*>& regions) const
 {
-    std::vector<PlaybackRegionProjection> projections;
-    projections.reserve (regions.size());
-
-    for (auto* playbackRegion : regions)
-    {
-        const auto* region = findPlaybackRegion (playbackRegion);
-        if (region != nullptr && region->hasValidPlacement())
-            projections.push_back (makeProjection (*region));
-    }
-
-    return projections;
+    std::vector<PlaybackRegionProjection> result;
+    for (const auto* region : regions)
+        if (const auto* entry = findPlaybackRegion (const_cast<juce::ARAPlaybackRegion*> (region)))
+            result.push_back (makeProjection (*entry));
+    return result;
 }
 
 std::vector<DeepSvcDocumentController::PlaybackRegionProjection>
@@ -105,9 +97,9 @@ DeepSvcDocumentController::getFocusedEditorPlaybackRegionProjection() const
 }
 
 void DeepSvcDocumentController::setEditorViewSelectionPlaybackRegions (
-    std::vector<juce::ARAPlaybackRegion*> regions)
+    std::vector<juce::ARAPlaybackRegion*> playbackRegions)
 {
-    editorSelectionPlaybackRegions = std::move (regions);
+    editorSelectionPlaybackRegions = std::move (playbackRegions);
     ++editorSelectionRevision;
     reconcileEditorSelectionPlaybackRegions();
 }
@@ -127,31 +119,6 @@ void DeepSvcDocumentController::unregisterPlaybackRenderer (DeepSvcPlaybackRende
                              playbackRenderers.end());
 }
 
-std::vector<DeepSvcPlaybackRenderer*> DeepSvcDocumentController::publishModelChange()
-{
-    return playbackRenderers;
-}
-
-void DeepSvcDocumentController::refreshRegisteredRenderers (
-    const std::vector<DeepSvcPlaybackRenderer*>& renderers)
-{
-    for (auto* renderer : renderers)
-        if (renderer != nullptr)
-            renderer->refreshRenderPlanFromDocument();
-}
-
-void DeepSvcDocumentController::reconcileEditorSelectionPlaybackRegions()
-{
-    editorSelectionPlaybackRegions.erase (
-        std::remove_if (editorSelectionPlaybackRegions.begin(),
-                        editorSelectionPlaybackRegions.end(),
-                        [this] (juce::ARAPlaybackRegion* playbackRegion)
-                        {
-                            return findPlaybackRegion (playbackRegion) == nullptr;
-                        }),
-        editorSelectionPlaybackRegions.end());
-}
-
 //==============================================================================
 // 内容读取
 
@@ -169,16 +136,87 @@ uint64_t DeepSvcDocumentController::readContentRevision (ContentKey key) const
     return content != nullptr ? content->contentRevision : 0;
 }
 
-juce::String DeepSvcDocumentController::readTimbreFile (ContentKey key) const
+int DeepSvcDocumentController::readActiveSlot (ContentKey key) const
 {
     const auto* content = findContent (key);
-    return content != nullptr ? content->timbreFile : juce::String();
+    return content != nullptr ? content->activeSlot : 0;
+}
+
+std::shared_ptr<const juce::AudioBuffer<float>>
+DeepSvcDocumentController::readSourceAudio (ContentKey key, int slot)
+{
+    auto* modification = findAudioModificationByContentKey (key);
+    if (modification == nullptr)
+        return nullptr;
+    return ensureSourceAudio (*modification, slot);
 }
 
 //==============================================================================
-// 内容写入
+// 槽位状态（A/B，docs/ara.md 第 4.1 节）
+
+void DeepSvcDocumentController::setActiveSlot (ContentKey key, int slot)
+{
+    auto* modification = findAudioModificationByContentKey (key);
+    if (modification == nullptr || ! modification->hasContentState())
+        return;
+
+    slot = juce::jlimit (0, 1, slot);
+    auto& content = *modification->content;
+    if (content.activeSlot == slot)
+        return;
+
+    content.activeSlot = slot;
+    ++content.contentRevision;
+    notifyPersistedStateChanged (*modification);
+    refreshRegisteredRenderers (publishModelChange());
+}
+
+void DeepSvcDocumentController::setSlotBypass (ContentKey key, int slot, bool bypass)
+{
+    auto* modification = findAudioModificationByContentKey (key);
+    if (modification == nullptr || ! modification->hasContentState())
+        return;
+
+    auto& content = *modification->content;
+    slot = juce::jlimit (0, 1, slot);
+    if (content.slots[static_cast<size_t> (slot)].bypass == bypass)
+        return;
+
+    content.slots[static_cast<size_t> (slot)].bypass = bypass;
+    ++content.contentRevision;
+    notifyPersistedStateChanged (*modification);
+    refreshRegisteredRenderers (publishModelChange());
+}
+
+void DeepSvcDocumentController::applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile)
+{
+    auto* modification = findAudioModificationByContentKey (key);
+    if (modification == nullptr || ! modification->hasContentState())
+        return;
+
+    auto& content = *modification->content;
+    slot = juce::jlimit (0, 1, slot);
+    content.slots[static_cast<size_t> (slot)].timbreFile = timbreFile;
+    notifyPersistedStateChanged (*modification);
+}
+
+void DeepSvcDocumentController::applySlotParams (ContentKey key, int slot, const EngineSynthParams& params)
+{
+    auto* modification = findAudioModificationByContentKey (key);
+    if (modification == nullptr || ! modification->hasContentState())
+        return;
+
+    auto& content = *modification->content;
+    slot = juce::jlimit (0, 1, slot);
+    content.slots[static_cast<size_t> (slot)].params = params;
+    notifyPersistedStateChanged (*modification);
+}
+
+//==============================================================================
+// 内容写入（任务完成时调用）
 
 void DeepSvcDocumentController::applyF0 (ContentKey key,
+                                         int slot,
                                          std::vector<float> times,
                                          std::vector<float> values)
 {
@@ -187,110 +225,124 @@ void DeepSvcDocumentController::applyF0 (ContentKey key,
         return;
 
     auto& content = *modification->content;
-    content.f0Times = std::move (times);
-    content.f0Values = std::move (values);
+    slot = juce::jlimit (0, 1, slot);
+    auto& slotContent = content.slots[static_cast<size_t> (slot)];
+    slotContent.f0Times = std::move (times);
+    slotContent.f0Values = std::move (values);
     ++content.contentRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::applyRenderedAudio (
-    ContentKey key,
-    std::shared_ptr<const std::vector<float>> samples,
-    const juce::String& fingerprint)
+void DeepSvcDocumentController::applyRenderedAudio (ContentKey key,
+                                                    int slot,
+                                                    std::shared_ptr<const std::vector<float>> samples,
+                                                    const EngineSynthParams& synthParams,
+                                                    const juce::String& synthTimbreFile)
 {
     auto* modification = findAudioModificationByContentKey (key);
     if (modification == nullptr || ! modification->hasContentState())
         return;
 
     auto& content = *modification->content;
-    content.renderedAudio = std::move (samples);
-    content.renderedFingerprint = fingerprint;
+    slot = juce::jlimit (0, 1, slot);
+    auto& slotContent = content.slots[static_cast<size_t> (slot)];
+    slotContent.renderedAudio = std::move (samples);
+    slotContent.synthParams = synthParams;
+    slotContent.synthTimbreFile = synthTimbreFile;
     ++content.contentRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
-}
-
-void DeepSvcDocumentController::applyTimbreFile (ContentKey key, const juce::String& timbreFile)
-{
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
-        return;
-
-    auto& content = *modification->content;
-    content.timbreFile = timbreFile;
-    ++content.contentRevision;
 }
 
 //==============================================================================
 // 任务入口
 
 void DeepSvcDocumentController::requestDetect (ContentKey key,
-                                               double contentStartSeconds,
-                                               double contentDurationSeconds,
+                                               int slot,
                                                EngineEstimator estimator)
 {
     auto* modification = findAudioModificationByContentKey (key);
     if (modification == nullptr)
         return;
 
-    const auto audio = ensureSourceAudio (*modification);
+    slot = juce::jlimit (0, 1, slot);
+    const auto audio = ensureSourceAudio (*modification, slot);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
-    // 只检测选中区域的内容窗口
-    const auto rate = static_cast<double> (TimeCoordinate::kRenderSampleRate);
-    const auto totalSamples = static_cast<int64_t> (audio->getNumSamples());
-    const auto startSample = std::clamp<int64_t> (
-        static_cast<int64_t> (std::floor (contentStartSeconds * rate)), 0, totalSamples);
-    const auto endSample = std::clamp<int64_t> (
-        static_cast<int64_t> (std::ceil ((contentStartSeconds + contentDurationSeconds) * rate)),
-        startSample, totalSamples);
-    if (endSample <= startSample)
-        return;
-
-    std::vector<float> pcm (static_cast<size_t> (endSample - startSample));
-    std::memcpy (pcm.data(), audio->getReadPointer (0) + startSample, pcm.size() * sizeof (float));
-    jobManager.submitDetect (key, std::move (pcm),
+    // OpenTune 模型：检测覆盖修改的整个源内容，同源的所有音频块共享一份结果，
+    // 显示时由钢琴卷按选中音频块的内容窗口裁剪
+    std::vector<float> pcm (static_cast<size_t> (audio->getNumSamples()));
+    std::memcpy (pcm.data(), audio->getReadPointer (0), pcm.size() * sizeof (float));
+    jobManager.submitDetect ({ key, slot }, std::move (pcm),
                              static_cast<uint32_t> (TimeCoordinate::kRenderSampleRate),
-                             static_cast<double> (startSample) / rate, estimator);
+                             estimator);
 }
 
 void DeepSvcDocumentController::requestSynth (ContentKey key,
+                                              int slot,
                                               const juce::String& timbreAbsolutePath,
-                                              const EngineSynthParams& params,
-                                              const juce::String& fingerprint)
+                                              const EngineSynthParams& params)
 {
     auto* modification = findAudioModificationByContentKey (key);
     if (modification == nullptr)
         return;
 
-    const auto audio = ensureSourceAudio (*modification);
+    slot = juce::jlimit (0, 1, slot);
+    const auto audio = ensureSourceAudio (*modification, slot);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
     std::vector<float> pcm (static_cast<size_t> (audio->getNumSamples()));
     std::memcpy (pcm.data(), audio->getReadPointer (0), pcm.size() * sizeof (float));
 
-    if (jobManager.submitSynth (key, std::move (pcm),
-                                static_cast<uint32_t> (TimeCoordinate::kRenderSampleRate),
-                                timbreAbsolutePath, params) != 0)
-        synthFingerprintsByKey[key] = fingerprint;
+    const JobKey jobKey { key, slot };
+    pendingSynthParams[jobKey] = params;
+    if (const auto* modificationContent = findContent (key))
+        pendingSynthTimbres[jobKey] = modificationContent->slots[static_cast<size_t> (slot)].timbreFile;
+
+    dumpDebugWav ("synth_input", pcm.data(), pcm.size());
+    debugLog ("requestSynth slot=" + juce::String (slot)
+              + " samples=" + juce::String (static_cast<int64_t> (pcm.size()))
+              + " estimator=" + juce::String (static_cast<uint32_t> (params.f0Estimator))
+              + " steps=" + juce::String (params.diffusionSteps)
+              + " shift=" + juce::String (params.pitchShift)
+              + " cfg=" + juce::String (params.cfgRate)
+              + " gain=" + juce::String (params.inputGainDb)
+              + " keepFirst=" + juce::String (params.keepFirstVocoderOutput ? 1 : 0)
+              + " timbre=" + timbreAbsolutePath);
+
+    jobManager.submitSynth (jobKey, std::move (pcm),
+                            static_cast<uint32_t> (TimeCoordinate::kRenderSampleRate),
+                            timbreAbsolutePath, params);
 }
 
-void DeepSvcDocumentController::cancelJobs (ContentKey key)
+void DeepSvcDocumentController::cancelJobs (ContentKey key, int slot)
 {
-    jobManager.cancelJobsFor (key);
+    jobManager.cancelJobsFor ({ key, juce::jlimit (0, 1, slot) });
 }
 
-JobStatus DeepSvcDocumentController::jobStatusFor (ContentKey key) const
+JobStatus DeepSvcDocumentController::jobStatusFor (ContentKey key, int slot) const
 {
-    return jobManager.statusFor (key);
+    return jobManager.statusFor ({ key, juce::jlimit (0, 1, slot) });
 }
+
+//==============================================================================
+// 源音频提取：modification 整个源窗口 → 44.1kHz 单声道，按槽位缓存
 
 std::shared_ptr<const juce::AudioBuffer<float>>
-DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modification)
+DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modification, int slot)
 {
-    if (modification.hasContentState() && modification.content->sourceAudio != nullptr)
-        return modification.content->sourceAudio;
+    attachSource (modification);
+    if (! modification.hasContentState())
+        return nullptr;
+
+    auto& content = *modification.content;
+    slot = juce::jlimit (0, 1, slot);
+    auto& slotContent = content.slots[static_cast<size_t> (slot)];
+    if (slotContent.sourceAudio != nullptr)
+        return slotContent.sourceAudio;
 
     if (modification.audioModification == nullptr)
         return nullptr;
@@ -343,94 +395,8 @@ DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modificati
             out[i] += data[i] * scale;
     }
 
-    if (! modification.hasContentState())
-    {
-        ModificationContent content;
-        if (const auto* sourceRef = findAudioSource (audioSource))
-        {
-            content.sourceWindow.sourcePersistentId = sourceRef->persistentId;
-            content.sourceWindow.sourceEndSeconds = sourceRef->durationSeconds();
-        }
-        content.contentRevision = 1;
-        modification.content = std::move (content);
-    }
-
-    modification.content->sourceAudio = mono;
+    slotContent.sourceAudio = mono;
     return mono;
-}
-
-std::shared_ptr<const juce::AudioBuffer<float>>
-DeepSvcDocumentController::readSourceAudio (ContentKey key)
-{
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr)
-        return nullptr;
-    return ensureSourceAudio (*modification);
-}
-
-void DeepSvcDocumentController::setAbBypass (bool bypass)
-{
-    if (abBypass == bypass)
-        return;
-    abBypass = bypass;
-    refreshRegisteredRenderers (publishModelChange());
-}
-
-juce::String DeepSvcDocumentController::makeFingerprint (const EngineSynthParams& params,
-                                                         const juce::String& timbreFile)
-{
-    juce::String text;
-    text << (params.f0Estimator == EngineEstimator::fcpe ? "fcpe" : "rmvpe") << "|"
-         << static_cast<int> (params.diffusionSteps) << "|"
-         << juce::String (params.pitchShift, 2) << "|"
-         << juce::String (params.cfgRate, 3) << "|"
-         << juce::String (params.inputGainDb, 2) << "|"
-         << (params.keepFirstVocoderOutput ? 1 : 0) << "|"
-         << timbreFile;
-    return text;
-}
-
-//==============================================================================
-// JobManager::Listener（消息线程）
-
-void DeepSvcDocumentController::jobStatusChanged (ContentKey, const JobStatus&)
-{
-    // 状态由编辑器轮询 jobStatusFor 读取，这里无需转发
-}
-
-void DeepSvcDocumentController::detectFinished (ContentKey key,
-                                                double windowStartSeconds,
-                                                std::vector<float> f0)
-{
-    std::vector<float> times (f0.size());
-    for (size_t i = 0; i < f0.size(); ++i)
-        times[i] = static_cast<float> (windowStartSeconds + static_cast<double> (i) * kF0FrameSeconds);
-    applyF0 (key, std::move (times), std::move (f0));
-}
-
-void DeepSvcDocumentController::synthFinished (ContentKey key,
-                                               std::vector<float> audio,
-                                               std::vector<float> firstVocoder,
-                                               std::vector<float> f0)
-{
-    // 输出声码器选项：请求了第一级声码器输出（level 1）则以它为渲染结果
-    auto samples = std::make_shared<const std::vector<float>> (
-        ! firstVocoder.empty() ? std::move (firstVocoder) : std::move (audio));
-
-    // 指纹以提交时为准：requestSynth 记录，完成时取出
-    juce::String fingerprint;
-    if (const auto it = synthFingerprintsByKey.find (key); it != synthFingerprintsByKey.end())
-    {
-        fingerprint = it->second;
-        synthFingerprintsByKey.erase (it);
-    }
-
-    applyRenderedAudio (key, std::move (samples), fingerprint);
-
-    std::vector<float> times (f0.size());
-    for (size_t i = 0; i < f0.size(); ++i)
-        times[i] = static_cast<float> (static_cast<double> (i) * kF0FrameSeconds);
-    applyF0 (key, std::move (times), std::move (f0));
 }
 
 //==============================================================================
@@ -438,58 +404,81 @@ void DeepSvcDocumentController::synthFinished (ContentKey key,
 
 void DeepSvcDocumentController::didUpdateAudioSourceProperties (juce::ARAAudioSource* audioSource)
 {
-    ensureAudioSource (audioSource).updateFrom (audioSource);
+    auto& sourceRef = ensureAudioSource (audioSource);
+    sourceRef.updateFrom (audioSource);
+
+    // 源形状变化（替换音频等）后，槽位的源音频缓存失效
+    for (auto& modification : audioModifications)
+    {
+        if (! modification.hasContentState()
+            || modification.content->sourceWindow.sourcePersistentId != sourceRef.persistentId)
+            continue;
+        attachSource (modification);
+        for (auto& slot : modification.content->slots)
+            slot.sourceAudio.reset();
+    }
 }
 
 void DeepSvcDocumentController::doUpdateAudioSourceContent (juce::ARAAudioSource* audioSource,
                                                             const juce::ARAContentUpdateScopes scopeFlags)
 {
-    juce::ignoreUnused (scopeFlags);
-    auto* source = findAudioSource (audioSource);
-    if (source == nullptr)
+    // 对应 OpenTuneDocumentController.cpp 的 doUpdateAudioSourceContent：
+    // 波形信号没变（只改了名称、颜色、标记等）时保留派生数据
+    if (! scopeFlags.affectSamples())
         return;
 
-    source->updateFrom (audioSource);
-
-    // 源音频内容变化后，依赖它的检测结果与合成结果全部失效
     for (auto& modification : audioModifications)
     {
-        if (modification.audioModification == nullptr
-            || modification.audioModification->getAudioSource() != audioSource
-            || ! modification.hasContentState())
+        if (modification.audioModification == nullptr || ! modification.hasContentState())
+            continue;
+        if (modification.audioModification->getAudioSource() != audioSource)
             continue;
 
         auto& content = *modification.content;
-        content.f0Times.clear();
-        content.f0Values.clear();
-        content.renderedAudio.reset();
-        content.renderedFingerprint.clear();
+        for (auto& slot : content.slots)
+        {
+            slot.sourceAudio.reset();
+            slot.renderedAudio.reset();
+            slot.f0Times.clear();
+            slot.f0Values.clear();
+        }
         ++content.contentRevision;
     }
+
     refreshRegisteredRenderers (publishModelChange());
 }
 
 void DeepSvcDocumentController::willDestroyAudioSource (juce::ARAAudioSource* audioSource)
 {
+    // 源销毁时，依赖它的修改内容一并失效
+    for (auto& modification : audioModifications)
+    {
+        if (! modification.hasContentState())
+            continue;
+        if (modification.audioModification != nullptr
+            && modification.audioModification->getAudioSource() == audioSource)
+        {
+            modification.content.reset();
+        }
+    }
+
     audioSources.erase (std::remove_if (audioSources.begin(), audioSources.end(),
-                                        [audioSource] (const AudioSourceRef& source)
+                                        [audioSource] (const AudioSourceRef& ref)
                                         {
-                                            return source.audioSource == audioSource;
+                                            return ref.audioSource == audioSource;
                                         }),
                         audioSources.end());
 }
 
-void DeepSvcDocumentController::didUpdateAudioModificationProperties (
-    juce::ARAAudioModification* audioModification)
+void DeepSvcDocumentController::didUpdateAudioModificationProperties (juce::ARAAudioModification* audioModification)
 {
     auto& modification = ensureAudioModification (audioModification);
     modification.updateIdentity (audioModification);
-    bindAudioModificationIdentity (modification);
+    attachSource (modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::willDestroyAudioModification (
-    juce::ARAAudioModification* audioModification)
+void DeepSvcDocumentController::willDestroyAudioModification (juce::ARAAudioModification* audioModification)
 {
     auto* modification = findAudioModification (audioModification);
     if (modification == nullptr)
@@ -506,9 +495,9 @@ void DeepSvcDocumentController::willDestroyAudioModification (
     reconcileEditorSelectionPlaybackRegions();
 
     audioModifications.erase (std::remove_if (audioModifications.begin(), audioModifications.end(),
-                                              [audioModification] (const AudioModificationState& m)
+                                              [audioModification] (const AudioModificationState& state)
                                               {
-                                                  return m.audioModification == audioModification;
+                                                  return state.audioModification == audioModification;
                                               }),
                               audioModifications.end());
 
@@ -524,9 +513,41 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
     region.updateFrom (playbackRegion);
     if (region.audioModificationPersistentId.isEmpty())
         region.audioModificationPersistentId = modification.persistentId;
-    debugLog ("dc didAddPlaybackRegion valid=" + juce::String (region.hasValidPlacement() ? 1 : 0)
-              + " start=" + juce::String (region.startInPlaybackTime, 3)
-              + " cached=" + juce::String (playbackRegions.size()));
+    refreshRegisteredRenderers (publishModelChange());
+}
+
+void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource,
+                                                                   bool enable)
+{
+    if (! enable)
+        return;
+
+    // 采样访问开启后立刻提取源音频缓存（两个槽位），保证后续检测/合成/回放可用
+    for (auto& modification : audioModifications)
+    {
+        if (! modification.hasContentState())
+            continue;
+        if (modification.content->sourceWindow.sourcePersistentId.isEmpty())
+            continue;
+        const auto* sourceRef = findAudioSource (modification.content->sourceWindow.sourcePersistentId);
+        if (sourceRef == nullptr || sourceRef->audioSource != audioSource)
+            continue;
+        ensureSourceAudio (modification, 0);
+        ensureSourceAudio (modification, 1);
+    }
+}
+
+void DeepSvcDocumentController::didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence)
+{
+    // 音轨颜色变化后刷新音频块的显示颜色
+    for (auto& region : playbackRegions)
+    {
+        if (region.playbackRegion == nullptr)
+            continue;
+        if (region.playbackRegion->getRegionSequence() != regionSequence)
+            continue;
+        region.updateDisplayColourFrom (region.playbackRegion);
+    }
     refreshRegisteredRenderers (publishModelChange());
 }
 
@@ -538,10 +559,9 @@ void DeepSvcDocumentController::didUpdatePlaybackRegionProperties (juce::ARAPlay
 }
 
 void DeepSvcDocumentController::willRemovePlaybackRegionFromAudioModification (
-    juce::ARAAudioModification* audioModification,
+    juce::ARAAudioModification*,
     juce::ARAPlaybackRegion* playbackRegion)
 {
-    juce::ignoreUnused (audioModification);
     removePlaybackRegion (playbackRegion);
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers (publishModelChange());
@@ -555,92 +575,96 @@ void DeepSvcDocumentController::willDestroyPlaybackRegion (juce::ARAPlaybackRegi
 }
 
 //==============================================================================
-// 归档（版本 0，不兼容任何其他格式）
+// 归档：persistentID + JSON 字符串（docs/ara.md 第 4.2 节）。
+// 与 OpenTune 的差异：OpenTune 记录 XML、渲染结果不入库、恢复后由渲染服务重建；
+// 本插件的推理结果（音高、合成音频）直接入库，这是设计选择。
 
-bool DeepSvcDocumentController::doRestoreObjectsFromStream (
-    juce::ARAInputStream& input,
-    const juce::ARARestoreObjectsFilter* filter)
+namespace
 {
-    if (input.readInt() != kArchiveMagic)
-        return false;
-    if (input.readInt() != kArchiveVersion)
-        return false;
 
-    const int recordCount = input.readInt();
-    if (recordCount < 0 || recordCount > kMaxArchiveRecords)
-        return false;
+constexpr int kArchiveMagic = 0x44535643;  // 'DSVC'
+constexpr int kArchiveVersion = 0;
+constexpr int kMaxArchiveRecords = 65536;
 
-    struct PendingRecord
-    {
-        AudioModificationState* target = nullptr;
-        ModificationContent content;
-    };
-    std::vector<PendingRecord> pending;
-    pending.reserve (static_cast<size_t> (recordCount));
+juce::String mapRestoredPersistentId (const juce::String& archivedPersistentId,
+                                      const juce::ARARestoreObjectsFilter* filter)
+{
+    if (archivedPersistentId.isEmpty())
+        return {};
 
-    for (int i = 0; i < recordCount; ++i)
-    {
-        const auto archivedPersistentId = input.readString();
-        const auto restoredPersistentId = mapRestoredPersistentId (archivedPersistentId, filter);
-        if (restoredPersistentId.isEmpty())
-            return false;
+    if (filter == nullptr)
+        return archivedPersistentId;
 
-        auto* target = findAudioModification (restoredPersistentId);
-        if (target == nullptr || target->audioModification == nullptr)
-            return false;
+    auto* audioModification = filter->getAudioModificationToRestoreStateWithID (
+        archivedPersistentId.toRawUTF8());
+    if (audioModification == nullptr)
+        return {};
 
-        ModificationContent content;
-        content.timbreFile = input.readString();
-        content.renderedFingerprint = input.readString();
-
-        const int f0Count = input.readInt();
-        if (f0Count < 0)
-            return false;
-        content.f0Times.resize (static_cast<size_t> (f0Count));
-        content.f0Values.resize (static_cast<size_t> (f0Count));
-        if (f0Count > 0)
-        {
-            const auto byteCount = static_cast<size_t> (f0Count) * sizeof (float);
-            if (input.read (content.f0Times.data(), static_cast<int> (byteCount)) != static_cast<int> (byteCount))
-                return false;
-            if (input.read (content.f0Values.data(), static_cast<int> (byteCount)) != static_cast<int> (byteCount))
-                return false;
-        }
-
-        const int renderedCount = input.readInt();
-        if (renderedCount < 0)
-            return false;
-        if (renderedCount > 0)
-        {
-            std::vector<float> samples (static_cast<size_t> (renderedCount));
-            const auto byteCount = static_cast<size_t> (renderedCount) * sizeof (float);
-            if (input.read (samples.data(), static_cast<int> (byteCount)) != static_cast<int> (byteCount))
-                return false;
-            content.renderedAudio = std::make_shared<const std::vector<float>> (std::move (samples));
-        }
-
-        // 内容窗口：整个源
-        if (const auto* source = findAudioSource (target->audioModification->getAudioSource()))
-        {
-            content.sourceWindow.sourcePersistentId = source->persistentId;
-            content.sourceWindow.sourceStartSeconds = 0.0;
-            content.sourceWindow.sourceEndSeconds = source->durationSeconds();
-        }
-        content.contentRevision = 1;
-
-        pending.push_back (PendingRecord { target, std::move (content) });
-    }
-
-    for (auto& record : pending)
-        record.target->content = std::move (record.content);
-
-    refreshRegisteredRenderers (publishModelChange());
-    return true;
+    const auto& restoredPersistentId = audioModification->getPersistentID();
+    return restoredPersistentId.empty() ? juce::String()
+                                        : juce::String::fromUTF8 (restoredPersistentId.c_str());
 }
 
-bool DeepSvcDocumentController::doStoreObjectsToStream (
-    juce::ARAOutputStream& output,
-    const juce::ARAStoreObjectsFilter* filter)
+juce::var floatVectorToJson (const std::vector<float>& values)
+{
+    juce::Array<juce::var> array;
+    array.ensureStorageAllocated (static_cast<int> (values.size()));
+    for (const float value : values)
+        array.add (static_cast<double> (value));
+    return juce::var (array);
+}
+
+std::vector<float> floatVectorFromJson (const juce::var& json)
+{
+    std::vector<float> values;
+    if (const auto* array = json.getArray())
+    {
+        values.reserve (static_cast<size_t> (array->size()));
+        for (const auto& element : *array)
+            values.push_back (static_cast<float> (static_cast<double> (element)));
+    }
+    return values;
+}
+
+juce::var slotToJson (const SlotContent& slot)
+{
+    auto* object = new juce::DynamicObject();
+    object->setProperty ("params", parameters::synthParamsToJson (slot.params));
+    object->setProperty ("timbreFile", slot.timbreFile);
+    object->setProperty ("bypass", slot.bypass);
+    object->setProperty ("f0Times", floatVectorToJson (slot.f0Times));
+    object->setProperty ("f0Values", floatVectorToJson (slot.f0Values));
+    if (slot.hasRenderedAudio())
+        object->setProperty ("renderedAudio", floatVectorToJson (*slot.renderedAudio));
+    if (slot.hasRenderedAudio())
+    {
+        object->setProperty ("synthParams", parameters::synthParamsToJson (slot.synthParams));
+        object->setProperty ("synthTimbreFile", slot.synthTimbreFile);
+    }
+    return juce::var (object);
+}
+
+void slotFromJson (SlotContent& slot, const juce::var& json)
+{
+    slot.params = parameters::synthParamsFromJson (json.getProperty ("params", juce::var()));
+    slot.timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
+    slot.bypass = static_cast<bool> (json.getProperty ("bypass", false));
+    slot.f0Times = floatVectorFromJson (json.getProperty ("f0Times", juce::var()));
+    slot.f0Values = floatVectorFromJson (json.getProperty ("f0Values", juce::var()));
+
+    const auto rendered = floatVectorFromJson (json.getProperty ("renderedAudio", juce::var()));
+    if (! rendered.empty())
+    {
+        slot.renderedAudio = std::make_shared<const std::vector<float>> (std::move (rendered));
+        slot.synthParams = parameters::synthParamsFromJson (json.getProperty ("synthParams", juce::var()));
+        slot.synthTimbreFile = json.getProperty ("synthTimbreFile", juce::String()).toString();
+    }
+}
+
+} // namespace
+
+bool DeepSvcDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& output,
+                                                        const juce::ARAStoreObjectsFilter* filter)
 {
     std::vector<const AudioModificationState*> bindings;
 
@@ -678,29 +702,378 @@ bool DeepSvcDocumentController::doStoreObjectsToStream (
     for (const auto* modification : bindings)
     {
         const auto& content = *modification->content;
+
+        auto* root = new juce::DynamicObject();
+        root->setProperty ("activeSlot", content.activeSlot);
+        auto* window = new juce::DynamicObject();
+        window->setProperty ("start", content.sourceWindow.sourceStartSeconds);
+        window->setProperty ("end", content.sourceWindow.sourceEndSeconds);
+        root->setProperty ("sourceWindow", juce::var (window));
+        juce::Array<juce::var> slotsJson;
+        for (const auto& slot : content.slots)
+            slotsJson.add (slotToJson (slot));
+        root->setProperty ("slots", juce::var (slotsJson));
+
         ok = output.writeString (modification->persistentId) && ok;
-        ok = output.writeString (content.timbreFile) && ok;
-        ok = output.writeString (content.renderedFingerprint) && ok;
-
-        const auto f0Count = static_cast<int> (content.f0Times.size());
-        ok = output.writeInt (f0Count) && ok;
-        if (f0Count > 0)
-        {
-            const auto byteCount = content.f0Times.size() * sizeof (float);
-            ok = output.write (content.f0Times.data(), byteCount) && ok;
-            ok = output.write (content.f0Values.data(), byteCount) && ok;
-        }
-
-        const auto renderedCount = content.renderedAudio != nullptr
-            ? static_cast<int> (content.renderedAudio->size())
-            : 0;
-        ok = output.writeInt (renderedCount) && ok;
-        if (renderedCount > 0)
-            ok = output.write (content.renderedAudio->data(),
-                               content.renderedAudio->size() * sizeof (float)) && ok;
+        ok = output.writeString (juce::JSON::toString (juce::var (root))) && ok;
     }
 
     return ok;
+}
+
+bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream& input,
+                                                            const juce::ARARestoreObjectsFilter* filter)
+{
+    if (input.readInt() != kArchiveMagic)
+        return false;
+    if (input.readInt() != kArchiveVersion)
+        return false;
+
+    const int recordCount = input.readInt();
+    if (recordCount < 0 || recordCount > kMaxArchiveRecords)
+        return false;
+
+    for (int i = 0; i < recordCount; ++i)
+    {
+        const auto archivedPersistentId = input.readString();
+        const auto jsonText = input.readString();
+
+        // 单条记录映射不上或损坏时跳过该条，对应 OpenTune restoreAudioModificationContent 的逐条容错
+        const auto restoredPersistentId = mapRestoredPersistentId (archivedPersistentId, filter);
+        if (restoredPersistentId.isEmpty())
+            continue;
+
+        auto* modification = findAudioModification (restoredPersistentId);
+        if (modification == nullptr || modification->audioModification == nullptr)
+            continue;
+
+        attachSource (*modification);
+        if (! modification->hasContentState())
+            continue;
+
+        const auto json = juce::JSON::parse (jsonText);
+        if (! json.isObject())
+            continue;
+
+        auto& content = *modification->content;
+
+        // 源窗口校验：与当前源不匹配说明音频已被替换，跳过该记录
+        const auto windowJson = json.getProperty ("sourceWindow", juce::var());
+        const auto archivedStart = static_cast<double> (windowJson.getProperty ("start", -1.0));
+        const auto archivedEnd = static_cast<double> (windowJson.getProperty ("end", -1.0));
+        if (archivedStart < 0.0
+            || std::abs (archivedStart - content.sourceWindow.sourceStartSeconds) > 1.0e-3
+            || std::abs (archivedEnd - content.sourceWindow.sourceEndSeconds) > 1.0e-3)
+            continue;
+
+        content.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
+        if (const auto* slotsJson = json.getProperty ("slots", juce::var()).getArray())
+            for (int s = 0; s < juce::jmin (2, slotsJson->size()); ++s)
+                slotFromJson (content.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
+
+        ++content.contentRevision;
+        // 恢复的内容对宿主是新增的：标记工程已修改，宿主才会保存
+        notifyPersistedStateChanged (*modification);
+    }
+
+    refreshRegisteredRenderers (publishModelChange());
+    return true;
+}
+
+//==============================================================================
+// JobManager::Listener（消息线程）
+
+void DeepSvcDocumentController::jobStatusChanged (JobKey key, const JobStatus& status)
+{
+    // 状态显示由编辑器经 jobStatusFor 轮询；这里只清理失败/取消任务的参数快照
+    if (status.state == JobStatus::State::failed || status.state == JobStatus::State::cancelled)
+    {
+        pendingSynthParams.erase (key);
+        pendingSynthTimbres.erase (key);
+    }
+}
+
+void DeepSvcDocumentController::detectFinished (JobKey key, std::vector<float> f0)
+{
+    const auto frameCount = f0.size();
+    const auto duration = static_cast<double> (frameCount) * 0.01;
+
+    std::vector<float> times (frameCount);
+    for (size_t i = 0; i < frameCount; ++i)
+        times[i] = static_cast<float> (static_cast<double> (i) * 0.01);
+
+    juce::ignoreUnused (duration);
+    applyF0 (key.content, key.slot, std::move (times), std::move (f0));
+}
+
+void DeepSvcDocumentController::synthFinished (JobKey key,
+                                               std::vector<float> audio,
+                                               std::vector<float> firstVocoder,
+                                               std::vector<float>)
+{
+    debugLog ("synthFinished slot=" + juce::String (key.slot)
+              + " audio=" + juce::String (static_cast<int64_t> (audio.size()))
+              + " firstVocoder=" + juce::String (static_cast<int64_t> (firstVocoder.size())));
+    dumpDebugWav ("synth_output_final", audio.data(), audio.size());
+    if (! firstVocoder.empty())
+        dumpDebugWav ("synth_output_first_vocoder", firstVocoder.data(), firstVocoder.size());
+
+    // 输出声码器 level 1：用第一级声码器输出替换最终结果
+    auto output = firstVocoder.empty() ? std::move (audio) : std::move (firstVocoder);
+
+    EngineSynthParams synthParams;
+    juce::String synthTimbre;
+    if (const auto it = pendingSynthParams.find (key); it != pendingSynthParams.end())
+    {
+        synthParams = it->second;
+        pendingSynthParams.erase (it);
+    }
+    if (const auto it = pendingSynthTimbres.find (key); it != pendingSynthTimbres.end())
+    {
+        synthTimbre = it->second;
+        pendingSynthTimbres.erase (it);
+    }
+
+    applyRenderedAudio (key.content, key.slot,
+                        std::make_shared<const std::vector<float>> (std::move (output)),
+                        synthParams, synthTimbre);
+}
+
+//==============================================================================
+// 查找与维护
+
+AudioSourceRef* DeepSvcDocumentController::findAudioSource (juce::ARAAudioSource* audioSource)
+{
+    for (auto& ref : audioSources)
+        if (ref.audioSource == audioSource)
+            return &ref;
+    return nullptr;
+}
+
+AudioSourceRef* DeepSvcDocumentController::findAudioSource (const juce::String& persistentId)
+{
+    for (auto& ref : audioSources)
+        if (ref.persistentId == persistentId)
+            return &ref;
+    return nullptr;
+}
+
+const AudioSourceRef* DeepSvcDocumentController::findAudioSource (const juce::String& persistentId) const
+{
+    for (const auto& ref : audioSources)
+        if (ref.persistentId == persistentId)
+            return &ref;
+    return nullptr;
+}
+
+AudioSourceRef& DeepSvcDocumentController::ensureAudioSource (juce::ARAAudioSource* audioSource)
+{
+    if (auto* ref = findAudioSource (audioSource))
+        return *ref;
+
+    audioSources.emplace_back();
+    auto& ref = audioSources.back();
+    ref.updateFrom (audioSource);
+    return ref;
+}
+
+AudioModificationState* DeepSvcDocumentController::findAudioModification (const juce::String& persistentId)
+{
+    for (auto& state : audioModifications)
+        if (state.persistentId == persistentId)
+            return &state;
+    return nullptr;
+}
+
+const AudioModificationState* DeepSvcDocumentController::findAudioModification (const juce::String& persistentId) const
+{
+    for (const auto& state : audioModifications)
+        if (state.persistentId == persistentId)
+            return &state;
+    return nullptr;
+}
+
+AudioModificationState* DeepSvcDocumentController::findAudioModification (juce::ARAAudioModification* audioModification)
+{
+    for (auto& state : audioModifications)
+        if (state.audioModification == audioModification)
+            return &state;
+    return nullptr;
+}
+
+AudioModificationState* DeepSvcDocumentController::findAudioModificationByContentKey (const ContentKey& key)
+{
+    for (auto& state : audioModifications)
+        if (state.contentIdentity == key)
+            return &state;
+    return nullptr;
+}
+
+const AudioModificationState* DeepSvcDocumentController::findAudioModificationByContentKey (const ContentKey& key) const
+{
+    for (const auto& state : audioModifications)
+        if (state.contentIdentity == key)
+            return &state;
+    return nullptr;
+}
+
+AudioModificationState& DeepSvcDocumentController::ensureAudioModification (juce::ARAAudioModification* audioModification)
+{
+    if (auto* state = findAudioModification (audioModification))
+        return *state;
+
+    audioModifications.emplace_back();
+    auto& state = audioModifications.back();
+    state.updateIdentity (audioModification);
+    state.contentIdentity = makeAudioModificationContentKey (state.persistentId);
+    return state;
+}
+
+void DeepSvcDocumentController::attachSource (AudioModificationState& modification)
+{
+    if (modification.audioModification == nullptr)
+        return;
+
+    auto* audioSource = modification.audioModification->getAudioSource();
+    if (audioSource == nullptr)
+        return;
+
+    const auto& sourceRef = ensureAudioSource (audioSource);
+
+    if (! modification.hasContentState())
+    {
+        modification.content.emplace();
+        modification.contentIdentity = bindAudioModificationIdentity (modification);
+    }
+
+    auto& content = *modification.content;
+    content.sourceWindow.sourcePersistentId = sourceRef.persistentId;
+    content.sourceWindow.sourceEndSeconds = sourceRef.durationSeconds();
+}
+
+ContentKey DeepSvcDocumentController::bindAudioModificationIdentity (AudioModificationState& modification)
+{
+    if (modification.contentIdentity.isValid())
+        return modification.contentIdentity;
+    modification.contentIdentity = makeAudioModificationContentKey (modification.persistentId);
+    return modification.contentIdentity;
+}
+
+ContentKey DeepSvcDocumentController::makeAudioModificationContentKey (const juce::String& persistentId)
+{
+    ContentKey key;
+    key.objectId = static_cast<uint64_t> (persistentId.hashCode64());
+    return key;
+}
+
+PlaybackRegion* DeepSvcDocumentController::findPlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
+{
+    for (auto& region : playbackRegions)
+        if (region.playbackRegion == playbackRegion)
+            return &region;
+    return nullptr;
+}
+
+const PlaybackRegion* DeepSvcDocumentController::findPlaybackRegion (juce::ARAPlaybackRegion* playbackRegion) const
+{
+    for (const auto& region : playbackRegions)
+        if (region.playbackRegion == playbackRegion)
+            return &region;
+    return nullptr;
+}
+
+PlaybackRegion& DeepSvcDocumentController::ensurePlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
+{
+    if (auto* region = findPlaybackRegion (playbackRegion))
+        return *region;
+
+    playbackRegions.emplace_back();
+    auto& region = playbackRegions.back();
+    region.updateFrom (playbackRegion);
+    return region;
+}
+
+bool DeepSvcDocumentController::removePlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
+{
+    const auto before = playbackRegions.size();
+    playbackRegions.erase (std::remove_if (playbackRegions.begin(), playbackRegions.end(),
+                                           [playbackRegion] (const PlaybackRegion& region)
+                                           {
+                                               return region.playbackRegion == playbackRegion;
+                                           }),
+                           playbackRegions.end());
+    return playbackRegions.size() != before;
+}
+
+//==============================================================================
+// 投影构建
+
+DeepSvcDocumentController::PlaybackRegionProjection
+DeepSvcDocumentController::makeProjection (const PlaybackRegion& region) const
+{
+    PlaybackRegionProjection projection;
+    projection.playbackRegion = region.playbackRegion;
+    projection.audioModificationPersistentId = region.audioModificationPersistentId;
+    projection.placementRevision = region.placementRevision;
+    projection.startInPlaybackTime = region.startInPlaybackTime;
+    projection.startInModificationTime = region.startInModificationTime;
+    projection.durationInPlaybackTime = region.durationInPlaybackTime;
+    projection.durationInModificationTime = region.durationInModificationTime;
+    projection.timestretchEnabled = region.timestretchEnabled;
+    projection.displayColour = region.displayColour;
+
+    if (const auto* modification = findAudioModification (region.audioModificationPersistentId))
+    {
+        projection.contentKey = modification->contentIdentity;
+        if (modification->hasContentState())
+        {
+            const auto& content = *modification->content;
+            projection.contentRevision = content.contentRevision;
+            projection.contentDurationSeconds = content.sourceWindow.durationSeconds();
+            // 激活槽位有合成结果且未旁通时，回放走合成音频
+            projection.hasRenderedAudio = content.active().hasRenderedAudio() && ! content.active().bypass;
+        }
+    }
+    return projection;
+}
+
+std::vector<DeepSvcDocumentController::PlaybackRegionProjection>
+DeepSvcDocumentController::buildProjections() const
+{
+    std::vector<PlaybackRegionProjection> result;
+    result.reserve (playbackRegions.size());
+    for (const auto& region : playbackRegions)
+        result.push_back (makeProjection (region));
+    return result;
+}
+
+std::vector<DeepSvcPlaybackRenderer*> DeepSvcDocumentController::publishModelChange()
+{
+    return playbackRenderers;
+}
+
+void DeepSvcDocumentController::refreshRegisteredRenderers (const std::vector<DeepSvcPlaybackRenderer*>& renderers)
+{
+    for (auto* renderer : renderers)
+        renderer->refreshFromDocument();
+}
+
+void DeepSvcDocumentController::reconcileEditorSelectionPlaybackRegions()
+{
+    editorSelectionPlaybackRegions.erase (
+        std::remove_if (editorSelectionPlaybackRegions.begin(), editorSelectionPlaybackRegions.end(),
+                        [this] (juce::ARAPlaybackRegion* region)
+                        {
+                            return findPlaybackRegion (region) == nullptr;
+                        }),
+        editorSelectionPlaybackRegions.end());
+}
+
+void DeepSvcDocumentController::notifyPersistedStateChanged (AudioModificationState& modification)
+{
+    // 对应 OpenTuneDocumentController.cpp 第 1877 行等的 notifyContentChanged 调用
+    if (modification.audioModification != nullptr)
+        modification.audioModification->notifyContentChanged (juce::ARAContentUpdateScopes(), true);
 }
 
 //==============================================================================
@@ -710,255 +1083,13 @@ juce::ARAPlaybackRenderer* DeepSvcDocumentController::doCreatePlaybackRenderer()
 {
     auto* renderer = new DeepSvcPlaybackRenderer (getDocumentController(), this);
     registerPlaybackRenderer (*renderer);
-    renderer->refreshRenderPlanFromDocument();
+    renderer->refreshFromDocument();
     return renderer;
 }
 
 juce::ARAEditorView* DeepSvcDocumentController::doCreateEditorView()
 {
     return new DeepSvcEditorView (getDocumentController(), *this);
-}
-
-//==============================================================================
-// 模型查找
-
-AudioSourceRef* DeepSvcDocumentController::findAudioSource (juce::ARAAudioSource* audioSource)
-{
-    const auto it = std::find_if (audioSources.begin(), audioSources.end(),
-                                  [audioSource] (const AudioSourceRef& source)
-                                  {
-                                      return source.audioSource == audioSource;
-                                  });
-    return it != audioSources.end() ? &*it : nullptr;
-}
-
-AudioSourceRef* DeepSvcDocumentController::findAudioSource (const juce::String& persistentId)
-{
-    const auto it = std::find_if (audioSources.begin(), audioSources.end(),
-                                  [&persistentId] (const AudioSourceRef& source)
-                                  {
-                                      return source.persistentId == persistentId;
-                                  });
-    return it != audioSources.end() ? &*it : nullptr;
-}
-
-const AudioSourceRef* DeepSvcDocumentController::findAudioSource (const juce::String& persistentId) const
-{
-    const auto it = std::find_if (audioSources.begin(), audioSources.end(),
-                                  [&persistentId] (const AudioSourceRef& source)
-                                  {
-                                      return source.persistentId == persistentId;
-                                  });
-    return it != audioSources.end() ? &*it : nullptr;
-}
-
-AudioSourceRef& DeepSvcDocumentController::ensureAudioSource (juce::ARAAudioSource* audioSource)
-{
-    if (auto* existing = findAudioSource (audioSource))
-        return *existing;
-
-    AudioSourceRef source;
-    source.updateFrom (audioSource);
-    audioSources.push_back (std::move (source));
-    return audioSources.back();
-}
-
-AudioModificationState* DeepSvcDocumentController::findAudioModification (const juce::String& persistentId)
-{
-    const auto it = std::find_if (audioModifications.begin(), audioModifications.end(),
-                                  [&persistentId] (const AudioModificationState& m)
-                                  {
-                                      return m.persistentId == persistentId;
-                                  });
-    return it != audioModifications.end() ? &*it : nullptr;
-}
-
-const AudioModificationState* DeepSvcDocumentController::findAudioModification (
-    const juce::String& persistentId) const
-{
-    const auto it = std::find_if (audioModifications.begin(), audioModifications.end(),
-                                  [&persistentId] (const AudioModificationState& m)
-                                  {
-                                      return m.persistentId == persistentId;
-                                  });
-    return it != audioModifications.end() ? &*it : nullptr;
-}
-
-AudioModificationState* DeepSvcDocumentController::findAudioModification (
-    juce::ARAAudioModification* audioModification)
-{
-    const auto it = std::find_if (audioModifications.begin(), audioModifications.end(),
-                                  [audioModification] (const AudioModificationState& m)
-                                  {
-                                      return m.audioModification == audioModification;
-                                  });
-    return it != audioModifications.end() ? &*it : nullptr;
-}
-
-AudioModificationState* DeepSvcDocumentController::findAudioModificationByContentKey (const ContentKey& key)
-{
-    const auto it = std::find_if (audioModifications.begin(), audioModifications.end(),
-                                  [&key] (const AudioModificationState& m)
-                                  {
-                                      return m.contentIdentity == key;
-                                  });
-    return it != audioModifications.end() ? &*it : nullptr;
-}
-
-const AudioModificationState* DeepSvcDocumentController::findAudioModificationByContentKey (
-    const ContentKey& key) const
-{
-    const auto it = std::find_if (audioModifications.begin(), audioModifications.end(),
-                                  [&key] (const AudioModificationState& m)
-                                  {
-                                      return m.contentIdentity == key;
-                                  });
-    return it != audioModifications.end() ? &*it : nullptr;
-}
-
-AudioModificationState& DeepSvcDocumentController::ensureAudioModification (
-    juce::ARAAudioModification* audioModification)
-{
-    if (auto* existing = findAudioModification (audioModification))
-        return *existing;
-
-    AudioModificationState modification;
-    modification.updateIdentity (audioModification);
-    bindAudioModificationIdentity (modification);
-
-    // 内容窗口：整个源
-    if (auto* source = findAudioSource (audioModification->getAudioSource()))
-    {
-        ModificationContent content;
-        content.sourceWindow.sourcePersistentId = source->persistentId;
-        content.sourceWindow.sourceStartSeconds = 0.0;
-        content.sourceWindow.sourceEndSeconds = source->durationSeconds();
-        content.contentRevision = 1;
-        modification.content = std::move (content);
-    }
-
-    audioModifications.push_back (std::move (modification));
-    return audioModifications.back();
-}
-
-ContentKey DeepSvcDocumentController::makeAudioModificationContentKey (const juce::String& persistentId)
-{
-    if (persistentId.isEmpty())
-        return {};
-
-    const auto existingId = araObjectIdsByPersistentId.find (persistentId);
-    if (existingId != araObjectIdsByPersistentId.end())
-        return { DomainKind::ARAAudioModification, existingId->second };
-
-    uint64_t objectId = static_cast<uint64_t> (persistentId.hashCode64());
-    if (objectId == 0)
-        objectId = 1469598103934665603ULL;
-
-    while (true)
-    {
-        const auto existingPersistentId = araPersistentIdsByObjectId.find (objectId);
-        if (existingPersistentId == araPersistentIdsByObjectId.end()
-            || existingPersistentId->second == persistentId)
-            break;
-
-        objectId = objectId * 1099511628211ULL + 1469598103934665603ULL;
-        if (objectId == 0)
-            objectId = 1;
-    }
-
-    araPersistentIdsByObjectId[objectId] = persistentId;
-    araObjectIdsByPersistentId[persistentId] = objectId;
-    return { DomainKind::ARAAudioModification, objectId };
-}
-
-ContentKey DeepSvcDocumentController::bindAudioModificationIdentity (AudioModificationState& modification)
-{
-    modification.contentIdentity = makeAudioModificationContentKey (modification.persistentId);
-    return modification.contentIdentity;
-}
-
-PlaybackRegion* DeepSvcDocumentController::findPlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
-{
-    const auto it = std::find_if (playbackRegions.begin(), playbackRegions.end(),
-                                  [playbackRegion] (const PlaybackRegion& region)
-                                  {
-                                      return region.playbackRegion == playbackRegion;
-                                  });
-    return it != playbackRegions.end() ? &*it : nullptr;
-}
-
-const PlaybackRegion* DeepSvcDocumentController::findPlaybackRegion (
-    juce::ARAPlaybackRegion* playbackRegion) const
-{
-    const auto it = std::find_if (playbackRegions.begin(), playbackRegions.end(),
-                                  [playbackRegion] (const PlaybackRegion& region)
-                                  {
-                                      return region.playbackRegion == playbackRegion;
-                                  });
-    return it != playbackRegions.end() ? &*it : nullptr;
-}
-
-PlaybackRegion& DeepSvcDocumentController::ensurePlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
-{
-    if (auto* existing = findPlaybackRegion (playbackRegion))
-        return *existing;
-
-    PlaybackRegion region;
-    region.updateFrom (playbackRegion);
-    playbackRegions.push_back (std::move (region));
-    return playbackRegions.back();
-}
-
-bool DeepSvcDocumentController::removePlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
-{
-    const auto oldSize = playbackRegions.size();
-    playbackRegions.erase (std::remove_if (playbackRegions.begin(), playbackRegions.end(),
-                                           [playbackRegion] (const PlaybackRegion& region)
-                                           {
-                                               return region.playbackRegion == playbackRegion;
-                                           }),
-                           playbackRegions.end());
-    return playbackRegions.size() != oldSize;
-}
-
-DeepSvcDocumentController::PlaybackRegionProjection
-DeepSvcDocumentController::makeProjection (const PlaybackRegion& placement) const
-{
-    PlaybackRegionProjection projection;
-    projection.playbackRegion = placement.playbackRegion;
-    projection.audioModificationPersistentId = placement.audioModificationPersistentId;
-    projection.placementRevision = placement.placementRevision;
-    projection.startInPlaybackTime = placement.startInPlaybackTime;
-    projection.startInModificationTime = placement.startInModificationTime;
-    projection.durationInPlaybackTime = placement.durationInPlaybackTime;
-    projection.durationInModificationTime = placement.durationInModificationTime;
-    projection.timestretchEnabled = placement.timestretchEnabled;
-    projection.displayColour = placement.displayColour;
-
-    const auto* modification = findAudioModification (placement.audioModificationPersistentId);
-    if (modification == nullptr || ! modification->hasContentState())
-        return projection;
-
-    const auto& content = *modification->content;
-    projection.contentKey = modification->contentKey();
-    projection.contentRevision = content.contentRevision;
-    projection.contentDurationSeconds = content.sourceWindow.durationSeconds();
-    projection.hasRenderedAudio = content.renderedAudio != nullptr && ! content.renderedAudio->empty();
-
-    return projection;
-}
-
-std::vector<DeepSvcDocumentController::PlaybackRegionProjection>
-DeepSvcDocumentController::buildProjections() const
-{
-    std::vector<PlaybackRegionProjection> projections;
-    projections.reserve (playbackRegions.size());
-
-    for (const auto& region : playbackRegions)
-        if (region.hasValidPlacement())
-            projections.push_back (makeProjection (region));
-
-    return projections;
 }
 
 } // namespace deepsvc

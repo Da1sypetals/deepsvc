@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+// 对应 OpenTune Source/Inference/F0InferenceService.cpp 的任务提交与状态追踪部分
 namespace deepsvc
 {
 
@@ -46,10 +47,9 @@ JobManager::~JobManager()
     EngineBridge::getInstance().removeListener (this);
 }
 
-uint64_t JobManager::submitDetect (ContentKey key,
+uint64_t JobManager::submitDetect (JobKey key,
                                    std::vector<float> pcm,
                                    uint32_t sampleRate,
-                                   double windowStartSeconds,
                                    EngineEstimator estimator)
 {
     const uint64_t jobId = nextJobId();
@@ -57,7 +57,6 @@ uint64_t JobManager::submitDetect (ContentKey key,
         const juce::ScopedLock lock (stateLock);
         jobKeys[jobId] = key;
         jobSubmitTimeMs[jobId] = juce::Time::getMillisecondCounterHiRes();
-        jobDetectWindowStart[jobId] = windowStartSeconds;
         activeJobsByKey[key].push_back (jobId);
     }
 
@@ -71,7 +70,7 @@ uint64_t JobManager::submitDetect (ContentKey key,
     return jobId;
 }
 
-uint64_t JobManager::submitSynth (ContentKey key,
+uint64_t JobManager::submitSynth (JobKey key,
                                   std::vector<float> pcm,
                                   uint32_t sampleRate,
                                   const juce::String& referencePath,
@@ -95,7 +94,7 @@ uint64_t JobManager::submitSynth (ContentKey key,
     return jobId;
 }
 
-void JobManager::cancelJobsFor (ContentKey key)
+void JobManager::cancelJobsFor (JobKey key)
 {
     std::vector<uint64_t> jobs;
     {
@@ -111,7 +110,7 @@ void JobManager::cancelJobsFor (ContentKey key)
         bridge.cancel (jobId);
 }
 
-JobStatus JobManager::statusFor (ContentKey key) const
+JobStatus JobManager::statusFor (JobKey key) const
 {
     const juce::ScopedLock lock (stateLock);
     const auto it = latestStatus.find (key);
@@ -137,19 +136,15 @@ void JobManager::engineDetectResult (uint64_t jobId, std::vector<float> f0)
 {
     juce::MessageManager::callAsync ([this, jobId, f0 = std::move (f0)]() mutable
     {
-        ContentKey key;
-        double windowStartSeconds = 0.0;
+        JobKey key;
         {
             const juce::ScopedLock lock (stateLock);
             const auto it = jobKeys.find (jobId);
             if (it == jobKeys.end())
                 return;
             key = it->second;
-            if (const auto windowIt = jobDetectWindowStart.find (jobId);
-                windowIt != jobDetectWindowStart.end())
-                windowStartSeconds = windowIt->second;
         }
-        listener.detectFinished (key, windowStartSeconds, std::move (f0));
+        listener.detectFinished (key, std::move (f0));
     });
 }
 
@@ -162,7 +157,7 @@ void JobManager::engineSynthResult (uint64_t jobId,
                                      firstVocoder = std::move (firstVocoder),
                                      f0 = std::move (f0)]() mutable
     {
-        ContentKey key;
+        JobKey key;
         {
             const juce::ScopedLock lock (stateLock);
             const auto it = jobKeys.find (jobId);
@@ -183,7 +178,8 @@ void JobManager::handleJobState (uint64_t jobId,
                                  double fraction,
                                  const juce::String& error)
 {
-    ContentKey key;
+    JobKey key;
+    JobStatus status;
     {
         const juce::ScopedLock lock (stateLock);
         const auto it = jobKeys.find (jobId);
@@ -191,7 +187,6 @@ void JobManager::handleJobState (uint64_t jobId,
             return;
         key = it->second;
 
-        JobStatus status;
         status.state = toJobStatusState (engineState);
         status.stage = stage;
         status.fraction = fraction;
@@ -199,8 +194,8 @@ void JobManager::handleJobState (uint64_t jobId,
         status.error = error;
 
         if (engineState == EngineJobState::succeeded)
-            if (const auto it = jobSubmitTimeMs.find (jobId); it != jobSubmitTimeMs.end())
-                status.elapsedSeconds = (juce::Time::getMillisecondCounterHiRes() - it->second) / 1000.0;
+            if (const auto submitIt = jobSubmitTimeMs.find (jobId); submitIt != jobSubmitTimeMs.end())
+                status.elapsedSeconds = (juce::Time::getMillisecondCounterHiRes() - submitIt->second) / 1000.0;
 
         latestStatus[key] = status;
 
@@ -210,13 +205,14 @@ void JobManager::handleJobState (uint64_t jobId,
         {
             jobKeys.erase (jobId);
             jobSubmitTimeMs.erase (jobId);
-            jobDetectWindowStart.erase (jobId);
             auto& active = activeJobsByKey[key];
             active.erase (std::remove (active.begin(), active.end(), jobId), active.end());
+            if (active.empty())
+                activeJobsByKey.erase (key);
         }
-
-        listener.jobStatusChanged (key, status);
     }
+
+    listener.jobStatusChanged (key, status);
 }
 
 void JobManager::failJob (uint64_t jobId, const juce::String& error)

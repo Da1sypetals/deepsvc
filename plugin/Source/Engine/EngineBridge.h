@@ -6,8 +6,9 @@
 
 struct FfiEvent; // native/src/ffi.rs 的 C ABI 事件结构，定义在 EngineBridge.cpp
 
-// 引擎桥接：推理在插件进程内执行（OpenTune 的进程级共享 session 模式），
-// Rust 静态库经 C ABI 直接调用；模型进程级加载一次，全部插件实例复用
+// 引擎桥接：推理在插件进程内执行，Rust 静态库经 C ABI 直接调用；
+// 模型进程级加载一次，全部插件实例复用。
+// 对应 OpenTune Source/Inference/ProcessF0Runtime.h 的进程级共享 session 模式
 namespace deepsvc
 {
 
@@ -17,15 +18,26 @@ enum class EngineEstimator : uint32_t
     fcpe = 1
 };
 
-// 与 native/src/ffi.rs 的 FfiSynthParams 对应
+// 与 native/src/ffi.rs 的 FfiSynthParams 对应；初始值为参数默认值（docs/ara.md 参数表）
 struct EngineSynthParams
 {
     EngineEstimator f0Estimator = EngineEstimator::rmvpe;
-    uint32_t diffusionSteps = 0;
-    float pitchShift = 0.0f;
-    float cfgRate = 0.0f;
-    float inputGainDb = 0.0f;
+    uint32_t diffusionSteps = 16;
+    float pitchShift = 12.0f;
+    float cfgRate = 0.9f;
+    float inputGainDb = -2.0f;
     bool keepFirstVocoderOutput = false;
+
+    bool operator== (const EngineSynthParams& rhs) const noexcept
+    {
+        return f0Estimator == rhs.f0Estimator
+            && diffusionSteps == rhs.diffusionSteps
+            && pitchShift == rhs.pitchShift
+            && cfgRate == rhs.cfgRate
+            && inputGainDb == rhs.inputGainDb
+            && keepFirstVocoderOutput == rhs.keepFirstVocoderOutput;
+    }
+    bool operator!= (const EngineSynthParams& rhs) const noexcept { return ! (*this == rhs); }
 };
 
 // 与 native/src/engine.rs 的 JobStateName 对应

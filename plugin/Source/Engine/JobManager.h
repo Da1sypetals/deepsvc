@@ -8,9 +8,29 @@
 #include "../Content/ContentKey.h"
 #include "EngineBridge.h"
 
-// 任务管理：提交检测/合成任务、按 ContentKey 追踪任务状态
+// 任务管理：提交检测/合成任务、按 ContentKey + 槽位追踪任务状态。
+// 对应 OpenTune Source/Inference/F0InferenceService.h 的任务提交与状态追踪部分；
+// 差异（按钮触发、无自动服务）见 docs/ara.md 第 3 节
 namespace deepsvc
 {
+
+// 任务身份：内容 + A/B 槽位。任务完成时写回发起时的槽位（docs/ara.md 第 4.1 节）
+struct JobKey
+{
+    ContentKey content;
+    int slot = 0;
+
+    bool operator== (const JobKey& rhs) const noexcept
+    {
+        return content == rhs.content && slot == rhs.slot;
+    }
+    bool operator< (const JobKey& rhs) const noexcept
+    {
+        if (content != rhs.content)
+            return content < rhs.content;
+        return slot < rhs.slot;
+    }
+};
 
 struct JobStatus
 {
@@ -41,10 +61,10 @@ public:
     {
         virtual ~Listener() = default;
         // 全部在消息线程触发
-        virtual void jobStatusChanged (ContentKey key, const JobStatus& status) = 0;
-        virtual void detectFinished (ContentKey key, double windowStartSeconds, std::vector<float> f0) = 0;
+        virtual void jobStatusChanged (JobKey key, const JobStatus& status) = 0;
+        virtual void detectFinished (JobKey key, std::vector<float> f0) = 0;
         // firstVocoder：提交时请求了第一级声码器输出则非空
-        virtual void synthFinished (ContentKey key,
+        virtual void synthFinished (JobKey key,
                                     std::vector<float> audio,
                                     std::vector<float> firstVocoder,
                                     std::vector<float> f0) = 0;
@@ -54,20 +74,18 @@ public:
     ~JobManager() override;
 
     // 消息线程调用，返回任务 ID；引擎初始化失败时返回 0 并广播失败状态
-    // windowStartSeconds：pcm 切片在内容内的起始秒数，完成时原样回传用于换算 F0 时间
-    uint64_t submitDetect (ContentKey key,
+    uint64_t submitDetect (JobKey key,
                            std::vector<float> pcm,
                            uint32_t sampleRate,
-                           double windowStartSeconds,
                            EngineEstimator estimator);
-    uint64_t submitSynth (ContentKey key,
+    uint64_t submitSynth (JobKey key,
                           std::vector<float> pcm,
                           uint32_t sampleRate,
                           const juce::String& referencePath,
                           const EngineSynthParams& params);
-    void cancelJobsFor (ContentKey key);
+    void cancelJobsFor (JobKey key);
 
-    JobStatus statusFor (ContentKey key) const;
+    JobStatus statusFor (JobKey key) const;
 
 private:
     void engineJobState (uint64_t jobId,
@@ -94,11 +112,10 @@ private:
     juce::String initError;
 
     juce::CriticalSection stateLock;
-    std::map<uint64_t, ContentKey> jobKeys;
+    std::map<uint64_t, JobKey> jobKeys;
     std::map<uint64_t, double> jobSubmitTimeMs;
-    std::map<uint64_t, double> jobDetectWindowStart;
-    std::map<ContentKey, std::vector<uint64_t>> activeJobsByKey;
-    std::map<ContentKey, JobStatus> latestStatus;
+    std::map<JobKey, std::vector<uint64_t>> activeJobsByKey;
+    std::map<JobKey, JobStatus> latestStatus;
 
     JUCE_DECLARE_NON_COPYABLE (JobManager)
 };

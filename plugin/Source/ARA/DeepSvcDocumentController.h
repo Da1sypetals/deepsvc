@@ -96,37 +96,32 @@ public:
     // ---- 内容读取（消息线程；渲染器经渲染计划拿数据，不走这里） ----
     const ModificationContent* findContent (ContentKey key) const;
     uint64_t readContentRevision (ContentKey key) const;
-    juce::String readTimbreFile (ContentKey key) const;
-    // 源音频（44.1kHz 单声道），首次调用时提取并重采样，之后走缓存
-    std::shared_ptr<const juce::AudioBuffer<float>> readSourceAudio (ContentKey key);
+    int readActiveSlot (ContentKey key) const;
+    // 槽位源音频（44.1kHz 单声道），首次调用时提取并重采样，之后走缓存
+    std::shared_ptr<const juce::AudioBuffer<float>> readSourceAudio (ContentKey key, int slot);
+
+    // ---- 槽位状态（A/B，docs/ara.md 第 4.1 节） ----
+    void setActiveSlot (ContentKey key, int slot);
+    void setSlotBypass (ContentKey key, int slot, bool bypass);
+    void applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile);
+    void applySlotParams (ContentKey key, int slot, const EngineSynthParams& params);
 
     // ---- 内容写入（任务完成时调用，消息线程） ----
-    void applyF0 (ContentKey key, std::vector<float> times, std::vector<float> values);
+    void applyF0 (ContentKey key, int slot, std::vector<float> times, std::vector<float> values);
     void applyRenderedAudio (ContentKey key,
+                             int slot,
                              std::shared_ptr<const std::vector<float>> samples,
-                             const juce::String& fingerprint);
-    void applyTimbreFile (ContentKey key, const juce::String& timbreFile);
+                             const EngineSynthParams& synthParams,
+                             const juce::String& synthTimbreFile);
 
     // ---- 任务入口（消息线程） ----
-    // 检测只覆盖选中区域的内容窗口 [contentStartSeconds, +contentDurationSeconds)
-    void requestDetect (ContentKey key,
-                        double contentStartSeconds,
-                        double contentDurationSeconds,
-                        EngineEstimator estimator);
+    void requestDetect (ContentKey key, int slot, EngineEstimator estimator);
     void requestSynth (ContentKey key,
+                       int slot,
                        const juce::String& timbreAbsolutePath,
-                       const EngineSynthParams& params,
-                       const juce::String& fingerprint);
-    void cancelJobs (ContentKey key);
-    JobStatus jobStatusFor (ContentKey key) const;
-
-    // ---- A/B 对比：true = 听原声（渲染器直通） ----
-    void setAbBypass (bool bypass);
-    bool isAbBypass() const noexcept { return abBypass; }
-
-    // ---- 合成指纹：参数 + 音色，一致则合成结果有效 ----
-    static juce::String makeFingerprint (const EngineSynthParams& params,
-                                         const juce::String& timbreFile);
+                       const EngineSynthParams& params);
+    void cancelJobs (ContentKey key, int slot);
+    JobStatus jobStatusFor (ContentKey key, int slot) const;
 
     // ---- ARA 通知 ----
     void didUpdateAudioSourceProperties (juce::ARAAudioSource* audioSource) override;
@@ -137,6 +132,8 @@ public:
     void willDestroyAudioModification (juce::ARAAudioModification* audioModification) override;
     void didAddPlaybackRegionToAudioModification (juce::ARAAudioModification* audioModification,
                                                   juce::ARAPlaybackRegion* playbackRegion) override;
+    void didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource, bool enable) override;
+    void didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence) override;
     void didUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion) override;
     void willRemovePlaybackRegionFromAudioModification (juce::ARAAudioModification* audioModification,
                                                         juce::ARAPlaybackRegion* playbackRegion) override;
@@ -153,9 +150,9 @@ protected:
 
 private:
     // JobManager::Listener
-    void jobStatusChanged (ContentKey key, const JobStatus& status) override;
-    void detectFinished (ContentKey key, double windowStartSeconds, std::vector<float> f0) override;
-    void synthFinished (ContentKey key,
+    void jobStatusChanged (JobKey key, const JobStatus& status) override;
+    void detectFinished (JobKey key, std::vector<float> f0) override;
+    void synthFinished (JobKey key,
                         std::vector<float> audio,
                         std::vector<float> firstVocoder,
                         std::vector<float> f0) override;
@@ -171,6 +168,7 @@ private:
     AudioModificationState* findAudioModificationByContentKey (const ContentKey& key);
     const AudioModificationState* findAudioModificationByContentKey (const ContentKey& key) const;
     AudioModificationState& ensureAudioModification (juce::ARAAudioModification* audioModification);
+    void attachSource (AudioModificationState& modification);
     ContentKey bindAudioModificationIdentity (AudioModificationState& modification);
     ContentKey makeAudioModificationContentKey (const juce::String& persistentId);
 
@@ -185,8 +183,13 @@ private:
     void refreshRegisteredRenderers (const std::vector<DeepSvcPlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
 
-    // 提取 modification 整个源窗口的音频，重采样到 44.1kHz 单声道并缓存
-    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (AudioModificationState& modification);
+    // 提取槽位的源音频：modification 整个源窗口，重采样到 44.1kHz 单声道并缓存
+    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (AudioModificationState& modification,
+                                                                       int slot);
+
+    // 对应 OpenTune 的 notifyContentChanged 调用点（OpenTuneDocumentController.cpp 第 1877 行等）：
+    // 入库状态变化后通知宿主工程已修改，宿主才会保存
+    static void notifyPersistedStateChanged (AudioModificationState& modification);
 
     std::vector<AudioSourceRef> audioSources;
     std::vector<AudioModificationState> audioModifications;
@@ -198,8 +201,9 @@ private:
     std::map<juce::String, uint64_t> araObjectIdsByPersistentId;
 
     JobManager jobManager;
-    bool abBypass { false };
-    std::map<ContentKey, juce::String> synthFingerprintsByKey;
+    // 合成任务提交时的参数与音色：完成时写入槽位快照
+    std::map<JobKey, EngineSynthParams> pendingSynthParams;
+    std::map<JobKey, juce::String> pendingSynthTimbres;
 
     JUCE_DECLARE_NON_COPYABLE (DeepSvcDocumentController)
 };
