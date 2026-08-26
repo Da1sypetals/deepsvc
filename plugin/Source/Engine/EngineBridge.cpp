@@ -14,6 +14,7 @@ struct FfiSynthParams
     uint32_t f0Estimator;
     uint32_t diffusionSteps;
     float pitchShift;
+    float pitchFineTuneCents;
     float cfgRate;
     float inputGainDb;
     bool keepFirstVocoderOutput;
@@ -165,6 +166,7 @@ bool EngineBridge::submitSynth (uint64_t jobId,
         static_cast<uint32_t> (params.f0Estimator),
         params.diffusionSteps,
         params.pitchShift,
+        params.pitchFineTuneCents,
         params.cfgRate,
         params.inputGainDb,
         params.keepFirstVocoderOutput

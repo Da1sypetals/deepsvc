@@ -6,7 +6,7 @@
 - 对事件音频做歌声转换：
   - 音高检测（RMVPE / FCPE）覆盖音频修改的整个源内容，同源的所有音频块共享一份源内容（OpenTune 的内容模型）；每个 A/B 槽位用各自的估计器分别检测；钢琴卷只显示选中音频块内容窗口内、激活槽位的音高，其他音频块不显示；
   - 从音色库选择参考音频进行合成，合成结果替换事件声音参与回放；激活槽位还没有音高数据时，点击合成会先自动执行音高检测再合成；
-  - 参数：F0 估计器、扩散步数、音高偏移、CFG 强度、输入增益、输出声码器。
+  - 参数：F0 估计器、扩散步数、音高偏移、音高微调、CFG 强度、输入增益、输出声码器。
 - A/B 对比：每个音频修改有两个完全独立的槽位，参数、音色、音高检测结果、合成结果、旁通设置互不共享；操作栏的 A|B 切换器切换，分别检测、分别合成、分别旁通（见第 4 节）。
 - 音色库：拖入文件导入，双击重命名，每行右侧删除按钮，右上角打开文件夹图标，与目录双向同步。
 - 推理在插件进程内执行（`native/` 编译为 Rust 静态库直接链入插件，使用 yingmusic crate），模型进程级加载一次、全部插件实例复用；模型权重打入插件 bundle，libsoxr 等依赖全部静态链接，插件自包含。
@@ -51,7 +51,7 @@
 每个音频修改的内容包含两个完全独立的槽位（A、B）与当前激活槽位。槽位之间零共享，各自持有：
 
 - 源 PCM 缓存；
-- params：6 个合成参数的当前编辑值；
+- params：7 个合成参数的当前编辑值；
 - synthParams：上次合成时的参数快照；
 - timbreFile：音色引用；
 - f0Times / f0Values：用该槽位的估计器对源音频的检测结果；
@@ -72,7 +72,7 @@
 | 状态 | 机制 |
 | --- | --- |
 | 两个槽位的完整数据与激活槽位（每个音频修改） | ARA 归档 |
-| 当前参数值（6 个 APVTS 参数） | 宿主 VST3 state chunk |
+| 当前参数值（7 个 APVTS 参数） | 宿主 VST3 state chunk |
 | 音色库文件 | 磁盘目录 |
 
 ARA 归档对应 OpenTune 的 `serializeAudioModificationContent` / `restoreAudioModificationContent` / `doStoreObjectsToStream` / `doRestoreObjectsFromStream`（`Source/ARA/OpenTuneDocumentController.cpp`）：
@@ -147,6 +147,7 @@ ARA 归档对应 OpenTune 的 `serializeAudioModificationContent` / `restoreAudi
 | F0 估计器 | RMVPE / FCPE | — | RMVPE |
 | 扩散步数 | 1–64 | 1 | 16 |
 | 音高偏移（半音） | -24 – +24 | 1 | 12 |
+| 音高微调（cents） | -100 – +100 | 1 | 0 |
 | CFG 强度 | 0–2 | 0.05 | 0.9 |
 | 输入增益 (dB) | -12 – +3 | 0.5 | -2 |
 | 输出声码器 | pupu-vocoder (level 1) / pc-nsf-hifigan (level 2) | — | pc-nsf-hifigan (level 2) |

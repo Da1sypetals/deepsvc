@@ -150,6 +150,7 @@ fn execute(
                 f0_estimator: params.f0_estimator.into(),
                 diffusion_steps: params.diffusion_steps as usize,
                 pitch_shift: params.pitch_shift,
+                pitch_fine_tune_cents: params.pitch_fine_tune_cents,
                 cfg_rate: params.cfg_rate,
                 input_gain_db: params.input_gain_db,
                 keep_first_vocoder_output: params.keep_first_vocoder_output,

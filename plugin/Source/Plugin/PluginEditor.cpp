@@ -145,7 +145,8 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
 
     // APVTS 参数变化写回激活槽位（docs/ara.md 第 4.1 节）
     for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
-                            &parameters::pitchShift, &parameters::cfgRate,
+                            &parameters::pitchShift, &parameters::pitchFineTuneCents,
+                            &parameters::cfgRate,
                             &parameters::inputGainDb, &parameters::outputVocoder })
         audioProcessor.apvts.addParameterListener (id->getParamID(), this);
 
@@ -209,7 +210,8 @@ DeepSvcEditor::~DeepSvcEditor()
     debugLog ("editor destroyed");
     stopTimer();
     for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
-                            &parameters::pitchShift, &parameters::cfgRate,
+                            &parameters::pitchShift, &parameters::pitchFineTuneCents,
+                            &parameters::cfgRate,
                             &parameters::inputGainDb, &parameters::outputVocoder })
         audioProcessor.apvts.removeParameterListener (id->getParamID(), this);
     overviewStrip.removeListener (this);

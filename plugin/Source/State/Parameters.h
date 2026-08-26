@@ -13,6 +13,7 @@ namespace deepsvc::parameters
 inline const juce::ParameterID f0Estimator { "f0_estimator", 1 };
 inline const juce::ParameterID diffusionSteps { "diffusion_steps", 1 };
 inline const juce::ParameterID pitchShift { "pitch_shift", 1 };
+inline const juce::ParameterID pitchFineTuneCents { "pitch_fine_tune_cents", 1 };
 inline const juce::ParameterID cfgRate { "cfg_rate", 1 };
 inline const juce::ParameterID inputGainDb { "input_gain_db", 1 };
 inline const juce::ParameterID outputVocoder { "output_vocoder", 1 };

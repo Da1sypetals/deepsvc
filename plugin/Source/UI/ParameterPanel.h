@@ -31,6 +31,8 @@ private:
     juce::Slider pitchShiftSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::TextButton octaveDownButton { juce::String (u8"-12") };
     juce::TextButton octaveUpButton { juce::String (u8"+12") };
+    juce::Label pitchFineTuneLabel;
+    juce::Slider pitchFineTuneSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label cfgLabel;
     juce::Slider cfgSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label gainLabel;
@@ -41,6 +43,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> estimatorAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stepsAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchShiftAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchFineTuneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cfgAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> vocoderAttachment;

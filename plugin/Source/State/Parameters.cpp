@@ -22,6 +22,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         pitchShift, "Pitch Shift", -24, 24, 12,
         juce::AudioParameterIntAttributes().withLabel ("semitones")));
 
+    params.push_back (std::make_unique<juce::AudioParameterInt> (
+        pitchFineTuneCents, "Pitch Fine Tune", -100, 100, 0,
+        juce::AudioParameterIntAttributes().withLabel ("cents")));
+
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         cfgRate, "CFG Rate", juce::NormalisableRange<float> (0.0f, 2.0f, 0.05f), 0.9f));
 
@@ -51,6 +55,10 @@ EngineSynthParams makeSynthParams (const juce::AudioProcessorValueTreeState& sta
     if (const auto* shift = state.getRawParameterValue (pitchShift.getParamID()))
         params.pitchShift = static_cast<float> (juce::jlimit (-24, 24, static_cast<int> (shift->load())));
 
+    if (const auto* cents = state.getRawParameterValue (pitchFineTuneCents.getParamID()))
+        params.pitchFineTuneCents = static_cast<float> (
+            juce::jlimit (-100, 100, static_cast<int> (cents->load())));
+
     // 引擎要求 cfg_rate 按 0.05 步进
     if (const auto* cfg = state.getRawParameterValue (cfgRate.getParamID()))
         params.cfgRate = std::round (juce::jlimit (0.0f, 2.0f, cfg->load()) / 0.05f) * 0.05f;
@@ -77,6 +85,7 @@ void pushSynthParamsToApvts (juce::AudioProcessorValueTreeState& state, const En
     setValue (f0Estimator, params.f0Estimator == EngineEstimator::fcpe ? 1.0f : 0.0f);
     setValue (diffusionSteps, static_cast<float> (params.diffusionSteps));
     setValue (pitchShift, params.pitchShift);
+    setValue (pitchFineTuneCents, params.pitchFineTuneCents);
     setValue (cfgRate, params.cfgRate);
     setValue (inputGainDb, params.inputGainDb);
     setValue (outputVocoder, params.keepFirstVocoderOutput ? 0.0f : 1.0f);
@@ -88,6 +97,7 @@ juce::var synthParamsToJson (const EngineSynthParams& params)
     object->setProperty ("estimator", params.f0Estimator == EngineEstimator::fcpe ? 1 : 0);
     object->setProperty ("diffusionSteps", static_cast<int> (params.diffusionSteps));
     object->setProperty ("pitchShift", static_cast<double> (params.pitchShift));
+    object->setProperty ("pitchFineTuneCents", static_cast<double> (params.pitchFineTuneCents));
     object->setProperty ("cfgRate", static_cast<double> (params.cfgRate));
     object->setProperty ("inputGainDb", static_cast<double> (params.inputGainDb));
     object->setProperty ("outputVocoder", params.keepFirstVocoderOutput ? 0 : 1);
@@ -104,6 +114,8 @@ EngineSynthParams synthParamsFromJson (const juce::var& json)
         1, 64, static_cast<int> (json.getProperty ("diffusionSteps", 16))));
     params.pitchShift = static_cast<float> (juce::jlimit (
         -24.0, 24.0, static_cast<double> (json.getProperty ("pitchShift", 12.0))));
+    params.pitchFineTuneCents = static_cast<float> (juce::jlimit (
+        -100.0, 100.0, static_cast<double> (json.getProperty ("pitchFineTuneCents", 0.0))));
     params.cfgRate = static_cast<float> (juce::jlimit (
         0.0, 2.0, static_cast<double> (json.getProperty ("cfgRate", 0.9))));
     params.inputGainDb = static_cast<float> (juce::jlimit (

@@ -308,6 +308,7 @@ void DeepSvcDocumentController::requestSynth (ContentKey key,
               + " estimator=" + juce::String (static_cast<uint32_t> (params.f0Estimator))
               + " steps=" + juce::String (params.diffusionSteps)
               + " shift=" + juce::String (params.pitchShift)
+              + " fineTuneCents=" + juce::String (params.pitchFineTuneCents)
               + " cfg=" + juce::String (params.cfgRate)
               + " gain=" + juce::String (params.inputGainDb)
               + " keepFirst=" + juce::String (params.keepFirstVocoderOutput ? 1 : 0)

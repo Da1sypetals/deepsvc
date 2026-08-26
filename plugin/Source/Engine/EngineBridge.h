@@ -24,6 +24,7 @@ struct EngineSynthParams
     EngineEstimator f0Estimator = EngineEstimator::rmvpe;
     uint32_t diffusionSteps = 16;
     float pitchShift = 12.0f;
+    float pitchFineTuneCents = 0.0f;
     float cfgRate = 0.9f;
     float inputGainDb = -2.0f;
     bool keepFirstVocoderOutput = false;
@@ -33,6 +34,7 @@ struct EngineSynthParams
         return f0Estimator == rhs.f0Estimator
             && diffusionSteps == rhs.diffusionSteps
             && pitchShift == rhs.pitchShift
+            && pitchFineTuneCents == rhs.pitchFineTuneCents
             && cfgRate == rhs.cfgRate
             && inputGainDb == rhs.inputGainDb
             && keepFirstVocoderOutput == rhs.keepFirstVocoderOutput;

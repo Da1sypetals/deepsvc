@@ -174,7 +174,7 @@ TimbrePanel::TimbrePanel (TimbreLibrary& libraryRef)
     openFolderButton->setTooltip (juce::String (u8"打开文件夹"));
     openFolderButton->onClick = [this]
     {
-        library.root().revealToUser();
+        library.root().startAsProcess();
     };
     addAndMakeVisible (*openFolderButton);
 
@@ -293,18 +293,55 @@ bool TimbrePanel::isInterestedInFileDrag (const juce::StringArray& files)
     return false;
 }
 
+void TimbrePanel::fileDragEnter (const juce::StringArray&, int, int)
+{
+    setFileDragActive (true);
+}
+
+void TimbrePanel::fileDragExit (const juce::StringArray&)
+{
+    setFileDragActive (false);
+}
+
 void TimbrePanel::filesDropped (const juce::StringArray& files, int, int)
 {
+    setFileDragActive (false);
     juce::Array<juce::File> fileList;
     for (const auto& file : files)
         fileList.add (juce::File (file));
     library.importFiles (fileList);
 }
 
+void TimbrePanel::setFileDragActive (bool active)
+{
+    if (fileDragActive == active)
+        return;
+
+    fileDragActive = active;
+    listBox.setColour (juce::ListBox::backgroundColourId,
+                       active ? UIColors::pink100 : UIColors::pink050);
+    hintLabel.setText (active ? juce::String (u8"松开鼠标导入音色")
+                              : juce::String (u8"拖入音频文件即可导入"),
+                       juce::dontSendNotification);
+    hintLabel.setColour (juce::Label::textColourId,
+                         active ? UIColors::pink700 : UIColors::ink300);
+    hintLabel.setVisible (active || library.entries().empty());
+    repaint();
+}
+
 void TimbrePanel::paint (juce::Graphics& g)
 {
     UIColors::fillPanelBackground (g, getLocalBounds().toFloat(), UIColors::panelCornerRadius);
-    UIColors::drawPanelFrame (g, getLocalBounds().toFloat(), UIColors::panelCornerRadius);
+    if (fileDragActive)
+    {
+        g.setColour (UIColors::pink600);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.25f),
+                                UIColors::panelCornerRadius, 2.5f);
+    }
+    else
+    {
+        UIColors::drawPanelFrame (g, getLocalBounds().toFloat(), UIColors::panelCornerRadius);
+    }
 
     g.setColour (UIColors::ink900);
     g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
@@ -322,7 +359,7 @@ void TimbrePanel::resized()
     area.removeFromTop (4);
     listBox.setBounds (area);
     hintLabel.setBounds (area.withSizeKeepingCentre (area.getWidth(), 24));
-    hintLabel.setVisible (library.entries().empty());
+    hintLabel.setVisible (fileDragActive || library.entries().empty());
 }
 
 } // namespace deepsvc

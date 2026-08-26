@@ -15,6 +15,7 @@ pub struct FfiSynthParams {
     pub f0_estimator: u32, // 0=rmvpe 1=fcpe
     pub diffusion_steps: u32,
     pub pitch_shift: f32,
+    pub pitch_fine_tune_cents: f32,
     pub cfg_rate: f32,
     pub input_gain_db: f32,
     pub keep_first_vocoder_output: bool,
@@ -262,6 +263,7 @@ pub extern "C" fn deepsvc_engine_submit_synth(
                 f0_estimator,
                 diffusion_steps: params.diffusion_steps,
                 pitch_shift: params.pitch_shift,
+                pitch_fine_tune_cents: params.pitch_fine_tune_cents,
                 cfg_rate: params.cfg_rate,
                 input_gain_db: params.input_gain_db,
                 keep_first_vocoder_output: params.keep_first_vocoder_output,

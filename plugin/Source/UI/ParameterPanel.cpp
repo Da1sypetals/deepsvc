@@ -10,7 +10,7 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     : apvts (state)
 {
     // 标签文字显式使用主文字色，不依赖 LookAndFeel 颜色解析
-    for (auto* label : { &estimatorLabel, &stepsLabel, &pitchShiftLabel,
+    for (auto* label : { &estimatorLabel, &stepsLabel, &pitchShiftLabel, &pitchFineTuneLabel,
                          &cfgLabel, &gainLabel, &vocoderLabel })
         label->setColour (juce::Label::textColourId, UIColors::ink900);
 
@@ -41,6 +41,13 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     octaveUpButton.onClick = [this] { pitchShiftSlider.setValue (12.0, juce::sendNotificationSync); };
     addAndMakeVisible (octaveDownButton);
     addAndMakeVisible (octaveUpButton);
+
+    pitchFineTuneLabel.setText (juce::String (u8"音高微调 (cents)"), juce::dontSendNotification);
+    addAndMakeVisible (pitchFineTuneLabel);
+    pitchFineTuneSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 54, 20);
+    addAndMakeVisible (pitchFineTuneSlider);
+    pitchFineTuneAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        apvts, parameters::pitchFineTuneCents.getParamID(), pitchFineTuneSlider);
 
     cfgLabel.setText (juce::String (u8"CFG 强度"), juce::dontSendNotification);
     addAndMakeVisible (cfgLabel);
@@ -82,8 +89,8 @@ void ParameterPanel::resized()
     area.removeFromTop (30);
 
     constexpr int labelHeight = 18;
-    constexpr int controlHeight = 26;
-    constexpr int rowGap = 8;
+    constexpr int controlHeight = 24;
+    constexpr int rowGap = 4;
 
     auto placeRow = [&] (juce::Label& label, juce::Component& control)
     {
@@ -109,6 +116,7 @@ void ParameterPanel::resized()
     }
     area.removeFromTop (rowGap);
 
+    placeRow (pitchFineTuneLabel, pitchFineTuneSlider);
     placeRow (cfgLabel, cfgSlider);
     placeRow (gainLabel, gainSlider);
     placeRow (vocoderLabel, vocoderCombo);

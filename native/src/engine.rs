@@ -18,6 +18,7 @@ pub struct SynthParams {
     pub f0_estimator: Estimator,
     pub diffusion_steps: u32,
     pub pitch_shift: f32,
+    pub pitch_fine_tune_cents: f32,
     pub cfg_rate: f32,
     pub input_gain_db: f32,
     pub keep_first_vocoder_output: bool,

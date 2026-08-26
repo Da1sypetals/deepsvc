@@ -26,6 +26,7 @@ fn synth_params(steps: u32) -> SynthParams {
         f0_estimator: Estimator::Rmvpe,
         diffusion_steps: steps,
         pitch_shift: 0.0,
+        pitch_fine_tune_cents: 0.0,
         cfg_rate: 0.9,
         input_gain_db: 0.0,
         keep_first_vocoder_output: true,

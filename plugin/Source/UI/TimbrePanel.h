@@ -45,14 +45,18 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
+    void setFileDragActive (bool active);
     void rowClicked (int rowNumber);
     void confirmDeleteRow (int rowNumber);
 
     TimbreLibrary& library;
     juce::ListBox listBox;
     juce::Label hintLabel;
+    bool fileDragActive = false;
 
     class IconButton;
     std::unique_ptr<IconButton> openFolderButton;
