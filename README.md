@@ -2,7 +2,7 @@
 
 ARA plugin for singing-voice conversion algorithms. Currently, this plugin is heavily tailored for Yingmusic-SVC, and will remain so until the next state-of-the-art algorithm (in the sense of output quality) is invented.
 
-Supports VST3 and AudioUnit; works only on Apple Silicon because of the dependency of Metal.
+Supports VST3 and AudioUnit; works only on Apple Silicon because it heavily depends on Metal/MLX.
 
 
 ## Acknowledgements
