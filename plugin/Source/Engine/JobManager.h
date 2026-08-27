@@ -14,20 +14,20 @@
 namespace deepsvc
 {
 
-// 任务身份：内容 + A/B 槽位。任务完成时写回发起时的槽位（docs/ara.md 第 4.1 节）
+// 任务身份：分段 + A/B 槽位。任务完成时写回发起时的分段与槽位（docs/ara.md 第 4.1 节）
 struct JobKey
 {
-    ContentKey content;
+    SegmentKey segment;
     int slot = 0;
 
     bool operator== (const JobKey& rhs) const noexcept
     {
-        return content == rhs.content && slot == rhs.slot;
+        return segment == rhs.segment && slot == rhs.slot;
     }
     bool operator< (const JobKey& rhs) const noexcept
     {
-        if (content != rhs.content)
-            return content < rhs.content;
+        if (segment != rhs.segment)
+            return segment < rhs.segment;
         return slot < rhs.slot;
     }
 };

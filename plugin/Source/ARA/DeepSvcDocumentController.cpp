@@ -7,6 +7,8 @@
 #include <cstring>
 
 #include "../DebugLog.h"
+#include "../Content/ContentArchive.h"
+#include "../Content/Segmentation.h"
 #include "../State/Parameters.h"
 #include "../Utils/TimeCoordinate.h"
 #include "DeepSvcEditorView.h"
@@ -42,6 +44,31 @@ void dumpDebugWav (const juce::String& name, const float* data, size_t numSample
     stream.release();
     const float* const channels[] = { data };
     writer->writeFromFloatArrays (channels, 1, static_cast<int> (numSamples));
+}
+
+// 从修改的源音频（44.1kHz 单声道，覆盖整个源窗口）截取分段区间的样本。
+// 分段区间用修改内部时间表示，与源窗口起点对齐
+std::vector<float> extractSegmentPcm (const juce::AudioBuffer<float>& sourceAudio,
+                                      const SegmentRange& range)
+{
+    const auto totalSamples = static_cast<int64_t> (sourceAudio.getNumSamples());
+    if (totalSamples <= 0 || ! range.isValid())
+        return {};
+
+    const auto rate = TimeCoordinate::kRenderSampleRate;
+    const auto begin = juce::jlimit<int64_t> (0, totalSamples,
+                                              static_cast<int64_t> (range.startSeconds * rate));
+    const auto end = juce::jlimit<int64_t> (begin, totalSamples,
+                                            static_cast<int64_t> (range.endSeconds() * rate));
+    const auto count = static_cast<size_t> (end - begin);
+    if (count == 0)
+        return {};
+
+    std::vector<float> pcm (count);
+    std::memcpy (pcm.data(),
+                 sourceAudio.getReadPointer (0, static_cast<int> (begin)),
+                 count * sizeof (float));
+    return pcm;
 }
 } // namespace
 
@@ -130,127 +157,153 @@ const ModificationContent* DeepSvcDocumentController::findContent (ContentKey ke
     return &*modification->content;
 }
 
+const ContentSegment* DeepSvcDocumentController::findSegment (SegmentKey key) const
+{
+    const auto* content = findContent (key.content);
+    if (content == nullptr)
+        return nullptr;
+
+    for (const auto& segment : content->segments)
+        if (SegmentKey::microsFromSeconds (segment.range.startSeconds) == key.startMicros)
+            return &segment;
+    return nullptr;
+}
+
+ContentSegment* DeepSvcDocumentController::findSegmentForWrite (SegmentKey key)
+{
+    auto* modification = findAudioModificationByContentKey (key.content);
+    if (modification == nullptr || ! modification->hasContentState())
+        return nullptr;
+
+    for (auto& segment : modification->content->segments)
+        if (SegmentKey::microsFromSeconds (segment.range.startSeconds) == key.startMicros)
+            return &segment;
+    return nullptr;
+}
+
 uint64_t DeepSvcDocumentController::readContentRevision (ContentKey key) const
 {
     const auto* content = findContent (key);
     return content != nullptr ? content->contentRevision : 0;
 }
 
-int DeepSvcDocumentController::readActiveSlot (ContentKey key) const
+int DeepSvcDocumentController::readActiveSlot (SegmentKey key) const
 {
-    const auto* content = findContent (key);
-    return content != nullptr ? content->activeSlot : 0;
+    const auto* segment = findSegment (key);
+    return segment != nullptr ? segment->activeSlot : 0;
 }
 
 std::shared_ptr<const juce::AudioBuffer<float>>
-DeepSvcDocumentController::readSourceAudio (ContentKey key, int slot)
+DeepSvcDocumentController::readSourceAudio (ContentKey key)
 {
     auto* modification = findAudioModificationByContentKey (key);
     if (modification == nullptr)
         return nullptr;
-    return ensureSourceAudio (*modification, slot);
+    return ensureSourceAudio (*modification);
 }
 
 //==============================================================================
-// 槽位状态（A/B，docs/ara.md 第 4.1 节）
+// 分段槽位状态（A/B，docs/ara.md 第 4.1 节）
 
-void DeepSvcDocumentController::setActiveSlot (ContentKey key, int slot)
+void DeepSvcDocumentController::setActiveSlot (SegmentKey key, int slot)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
     slot = juce::jlimit (0, 1, slot);
-    auto& content = *modification->content;
-    if (content.activeSlot == slot)
+    if (segment->activeSlot == slot)
         return;
 
-    content.activeSlot = slot;
-    ++content.contentRevision;
+    segment->activeSlot = slot;
+
+    auto* modification = findAudioModificationByContentKey (key.content);
+    ++modification->content->contentRevision;
     notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::setSlotBypass (ContentKey key, int slot, bool bypass)
+void DeepSvcDocumentController::setSlotBypass (SegmentKey key, int slot, bool bypass)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
-    auto& content = *modification->content;
     slot = juce::jlimit (0, 1, slot);
-    if (content.slots[static_cast<size_t> (slot)].bypass == bypass)
+    if (segment->slots[static_cast<size_t> (slot)].bypass == bypass)
         return;
 
-    content.slots[static_cast<size_t> (slot)].bypass = bypass;
-    ++content.contentRevision;
+    segment->slots[static_cast<size_t> (slot)].bypass = bypass;
+
+    auto* modification = findAudioModificationByContentKey (key.content);
+    ++modification->content->contentRevision;
     notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile)
+void DeepSvcDocumentController::applyTimbreFile (SegmentKey key, int slot, const juce::String& timbreFile)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
-    auto& content = *modification->content;
     slot = juce::jlimit (0, 1, slot);
-    content.slots[static_cast<size_t> (slot)].timbreFile = timbreFile;
-    notifyPersistedStateChanged (*modification);
+    segment->slots[static_cast<size_t> (slot)].timbreFile = timbreFile;
+    notifyPersistedStateChanged (*findAudioModificationByContentKey (key.content));
 }
 
-void DeepSvcDocumentController::applySlotParams (ContentKey key, int slot, const EngineSynthParams& params)
+void DeepSvcDocumentController::applySlotParams (SegmentKey key, int slot, const EngineSynthParams& params)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
-    auto& content = *modification->content;
     slot = juce::jlimit (0, 1, slot);
-    content.slots[static_cast<size_t> (slot)].params = params;
-    notifyPersistedStateChanged (*modification);
+    segment->slots[static_cast<size_t> (slot)].params = params;
+    notifyPersistedStateChanged (*findAudioModificationByContentKey (key.content));
 }
 
 //==============================================================================
 // 内容写入（任务完成时调用）
 
-void DeepSvcDocumentController::applyF0 (ContentKey key,
+void DeepSvcDocumentController::applyF0 (SegmentKey key,
                                          int slot,
                                          std::vector<float> times,
                                          std::vector<float> values)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
-    auto& content = *modification->content;
     slot = juce::jlimit (0, 1, slot);
-    auto& slotContent = content.slots[static_cast<size_t> (slot)];
+    auto& slotContent = segment->slots[static_cast<size_t> (slot)];
     slotContent.f0Times = std::move (times);
     slotContent.f0Values = std::move (values);
-    ++content.contentRevision;
+
+    auto* modification = findAudioModificationByContentKey (key.content);
+    ++modification->content->contentRevision;
     notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::applyRenderedAudio (ContentKey key,
+void DeepSvcDocumentController::applyRenderedAudio (SegmentKey key,
                                                     int slot,
                                                     std::shared_ptr<const std::vector<float>> samples,
                                                     const EngineSynthParams& synthParams,
                                                     const juce::String& synthTimbreFile)
 {
-    auto* modification = findAudioModificationByContentKey (key);
-    if (modification == nullptr || ! modification->hasContentState())
+    auto* segment = findSegmentForWrite (key);
+    if (segment == nullptr)
         return;
 
-    auto& content = *modification->content;
     slot = juce::jlimit (0, 1, slot);
-    auto& slotContent = content.slots[static_cast<size_t> (slot)];
+    auto& slotContent = segment->slots[static_cast<size_t> (slot)];
     slotContent.renderedAudio = std::move (samples);
     slotContent.synthParams = synthParams;
     slotContent.synthTimbreFile = synthTimbreFile;
-    ++content.contentRevision;
+
+    auto* modification = findAudioModificationByContentKey (key.content);
+    ++modification->content->contentRevision;
     notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
@@ -258,52 +311,63 @@ void DeepSvcDocumentController::applyRenderedAudio (ContentKey key,
 //==============================================================================
 // 任务入口
 
-void DeepSvcDocumentController::requestDetect (ContentKey key,
+void DeepSvcDocumentController::requestDetect (SegmentKey key,
                                                int slot,
                                                EngineEstimator estimator)
 {
-    auto* modification = findAudioModificationByContentKey (key);
+    auto* modification = findAudioModificationByContentKey (key.content);
     if (modification == nullptr)
         return;
 
+    const auto* segment = findSegment (key);
+    if (segment == nullptr)
+        return;
+
     slot = juce::jlimit (0, 1, slot);
-    const auto audio = ensureSourceAudio (*modification, slot);
+    const auto audio = ensureSourceAudio (*modification);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
-    // OpenTune 模型：检测覆盖修改的整个源内容，同源的所有音频块共享一份结果，
-    // 显示时由钢琴卷按选中音频块的内容窗口裁剪
-    std::vector<float> pcm (static_cast<size_t> (audio->getNumSamples()));
-    std::memcpy (pcm.data(), audio->getReadPointer (0), pcm.size() * sizeof (float));
+    // 检测只覆盖本分段的区间：切分得到的两个分段各自检测自己那段
+    auto pcm = extractSegmentPcm (*audio, segment->range);
+    if (pcm.empty())
+        return;
+
     jobManager.submitDetect ({ key, slot }, std::move (pcm),
                              static_cast<uint32_t> (TimeCoordinate::kRenderSampleRate),
                              estimator);
 }
 
-void DeepSvcDocumentController::requestSynth (ContentKey key,
+void DeepSvcDocumentController::requestSynth (SegmentKey key,
                                               int slot,
                                               const juce::String& timbreAbsolutePath,
                                               const EngineSynthParams& params)
 {
-    auto* modification = findAudioModificationByContentKey (key);
+    auto* modification = findAudioModificationByContentKey (key.content);
     if (modification == nullptr)
         return;
 
+    const auto* segment = findSegment (key);
+    if (segment == nullptr)
+        return;
+
     slot = juce::jlimit (0, 1, slot);
-    const auto audio = ensureSourceAudio (*modification, slot);
+    const auto audio = ensureSourceAudio (*modification);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
-    std::vector<float> pcm (static_cast<size_t> (audio->getNumSamples()));
-    std::memcpy (pcm.data(), audio->getReadPointer (0), pcm.size() * sizeof (float));
+    auto pcm = extractSegmentPcm (*audio, segment->range);
+    if (pcm.empty())
+        return;
 
     const JobKey jobKey { key, slot };
     pendingSynthParams[jobKey] = params;
-    if (const auto* modificationContent = findContent (key))
-        pendingSynthTimbres[jobKey] = modificationContent->slots[static_cast<size_t> (slot)].timbreFile;
+    pendingSynthTimbres[jobKey] = segment->slots[static_cast<size_t> (slot)].timbreFile;
 
     dumpDebugWav ("synth_input", pcm.data(), pcm.size());
     debugLog ("requestSynth slot=" + juce::String (slot)
+              + " segStart=" + juce::String (segment->range.startSeconds, 3)
+              + " segDur=" + juce::String (segment->range.durationSeconds, 3)
               + " samples=" + juce::String (static_cast<int64_t> (pcm.size()))
               + " estimator=" + juce::String (static_cast<uint32_t> (params.f0Estimator))
               + " steps=" + juce::String (params.diffusionSteps)
@@ -319,31 +383,29 @@ void DeepSvcDocumentController::requestSynth (ContentKey key,
                             timbreAbsolutePath, params);
 }
 
-void DeepSvcDocumentController::cancelJobs (ContentKey key, int slot)
+void DeepSvcDocumentController::cancelJobs (SegmentKey key, int slot)
 {
     jobManager.cancelJobsFor ({ key, juce::jlimit (0, 1, slot) });
 }
 
-JobStatus DeepSvcDocumentController::jobStatusFor (ContentKey key, int slot) const
+JobStatus DeepSvcDocumentController::jobStatusFor (SegmentKey key, int slot) const
 {
     return jobManager.statusFor ({ key, juce::jlimit (0, 1, slot) });
 }
 
 //==============================================================================
-// 源音频提取：modification 整个源窗口 → 44.1kHz 单声道，按槽位缓存
+// 源音频提取：modification 整个源窗口 → 44.1kHz 单声道，修改级共享缓存
 
 std::shared_ptr<const juce::AudioBuffer<float>>
-DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modification, int slot)
+DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modification)
 {
     attachSource (modification);
     if (! modification.hasContentState())
         return nullptr;
 
     auto& content = *modification.content;
-    slot = juce::jlimit (0, 1, slot);
-    auto& slotContent = content.slots[static_cast<size_t> (slot)];
-    if (slotContent.sourceAudio != nullptr)
-        return slotContent.sourceAudio;
+    if (content.sourceAudio != nullptr)
+        return content.sourceAudio;
 
     if (modification.audioModification == nullptr)
         return nullptr;
@@ -396,12 +458,72 @@ DeepSvcDocumentController::ensureSourceAudio (AudioModificationState& modificati
             out[i] += data[i] * scale;
     }
 
-    slotContent.sourceAudio = mono;
-    // 源音频就绪属于内容变化：推进 revision，编辑器心跳会重新推送波形
-    ++content.contentRevision;
+    content.sourceAudio = mono;
     // 源音频就绪属于内容变化：推进 revision，编辑器心跳会重新推送波形
     ++content.contentRevision;
     return mono;
+}
+
+//==============================================================================
+// 分段划分与继承（docs/ara.md 第 4.1 节）
+
+void DeepSvcDocumentController::reconcileSegments (AudioModificationState& modification)
+{
+    if (! modification.hasContentState() || modification.persistentId.isEmpty())
+        return;
+
+    auto& content = *modification.content;
+
+    // 本修改下所有片段的内容窗口
+    std::vector<SegmentRange> windows;
+    for (const auto& region : playbackRegions)
+    {
+        if (region.audioModificationPersistentId != modification.persistentId)
+            continue;
+        const SegmentRange window { region.startInModificationTime, region.durationInModificationTime };
+        if (window.isValid())
+            windows.push_back (window);
+    }
+
+    if (windows.empty())
+        return;
+
+    const auto ranges = segmentation::computeRanges (windows);
+    if (ranges.empty())
+        return;
+
+    // 布局未变则不动，避免每次属性更新都重建分段
+    if (segmentation::layoutMatches (content.segments, ranges))
+        return;
+
+    // 旧分段上进行中的任务失去写回目标：取消它们
+    for (const auto& segment : content.segments)
+    {
+        const SegmentKey key { modification.contentIdentity,
+                               SegmentKey::microsFromSeconds (segment.range.startSeconds) };
+        const bool survives = std::any_of (ranges.begin(), ranges.end(),
+                                           [&segment] (const SegmentRange& range)
+                                           { return segment.range.matches (range, segmentation::kBoundaryTolerance); });
+        if (survives)
+            continue;
+        for (int slot = 0; slot < 2; ++slot)
+        {
+            jobManager.cancelJobsFor ({ key, slot });
+            pendingSynthParams.erase ({ key, slot });
+            pendingSynthTimbres.erase ({ key, slot });
+        }
+    }
+
+    content.segments = segmentation::rebuild (content.segments, ranges,
+                                              TimeCoordinate::kRenderSampleRate);
+    ++content.contentRevision;
+    notifyPersistedStateChanged (modification);
+}
+
+void DeepSvcDocumentController::reconcileAllSegments()
+{
+    for (auto& modification : audioModifications)
+        reconcileSegments (modification);
 }
 
 //==============================================================================
@@ -412,15 +534,14 @@ void DeepSvcDocumentController::didUpdateAudioSourceProperties (juce::ARAAudioSo
     auto& sourceRef = ensureAudioSource (audioSource);
     sourceRef.updateFrom (audioSource);
 
-    // 源形状变化（替换音频等）后，槽位的源音频缓存失效
+    // 源形状变化（替换音频等）后，修改的源音频缓存失效
     for (auto& modification : audioModifications)
     {
         if (! modification.hasContentState()
             || modification.content->sourceWindow.sourcePersistentId != sourceRef.persistentId)
             continue;
         attachSource (modification);
-        for (auto& slot : modification.content->slots)
-            slot.sourceAudio.reset();
+        modification.content->sourceAudio.reset();
     }
 }
 
@@ -440,12 +561,15 @@ void DeepSvcDocumentController::doUpdateAudioSourceContent (juce::ARAAudioSource
             continue;
 
         auto& content = *modification.content;
-        for (auto& slot : content.slots)
+        content.sourceAudio.reset();
+        for (auto& segment : content.segments)
         {
-            slot.sourceAudio.reset();
-            slot.renderedAudio.reset();
-            slot.f0Times.clear();
-            slot.f0Values.clear();
+            for (auto& slot : segment.slots)
+            {
+                slot.renderedAudio.reset();
+                slot.f0Times.clear();
+                slot.f0Values.clear();
+            }
         }
         ++content.contentRevision;
     }
@@ -518,11 +642,14 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
     region.updateFrom (playbackRegion);
     if (region.audioModificationPersistentId.isEmpty())
         region.audioModificationPersistentId = modification.persistentId;
+    attachSource (modification);
+    reconcileSegments (modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
 // 对应 OpenTuneDocumentController.cpp 的 didEndEditing（第 1017 行）：
-// 文档编辑/恢复结束后物化所有内容的源音频，保证编辑器打开即有波形
+// 编辑事务结束后重新划分分段（切分、复制、修剪的继承在此发生），
+// 并物化所有内容的源音频，保证编辑器打开即有波形
 void DeepSvcDocumentController::didEndEditing (juce::ARADocument* document)
 {
     juce::ignoreUnused (document);
@@ -533,9 +660,11 @@ void DeepSvcDocumentController::didEndEditing (juce::ARADocument* document)
             continue;
         if (modification.content->sourceWindow.sourcePersistentId.isEmpty())
             continue;
-        ensureSourceAudio (modification, 0);
-        ensureSourceAudio (modification, 1);
+        ensureSourceAudio (modification);
     }
+
+    reconcileAllSegments();
+    refreshRegisteredRenderers (publishModelChange());
 }
 
 void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource,
@@ -544,7 +673,7 @@ void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudi
     if (! enable)
         return;
 
-    // 采样访问开启后立刻提取源音频缓存（两个槽位），保证后续检测/合成/回放可用
+    // 采样访问开启后立刻提取源音频缓存，保证后续检测/合成/回放可用
     for (auto& modification : audioModifications)
     {
         if (! modification.hasContentState())
@@ -554,8 +683,7 @@ void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudi
         const auto* sourceRef = findAudioSource (modification.content->sourceWindow.sourcePersistentId);
         if (sourceRef == nullptr || sourceRef->audioSource != audioSource)
             continue;
-        ensureSourceAudio (modification, 0);
-        ensureSourceAudio (modification, 1);
+        ensureSourceAudio (modification);
     }
 }
 
@@ -577,6 +705,8 @@ void DeepSvcDocumentController::didUpdatePlaybackRegionProperties (juce::ARAPlay
 {
     auto& region = ensurePlaybackRegion (playbackRegion);
     region.updateFrom (playbackRegion);
+    if (auto* modification = findAudioModification (region.audioModificationPersistentId))
+        reconcileSegments (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
@@ -605,7 +735,7 @@ namespace
 {
 
 constexpr int kArchiveMagic = 0x44535643;  // 'DSVC'
-constexpr int kArchiveVersion = 0;
+constexpr int kArchiveVersion = 1;
 constexpr int kMaxArchiveRecords = 65536;
 
 juce::String mapRestoredPersistentId (const juce::String& archivedPersistentId,
@@ -625,62 +755,6 @@ juce::String mapRestoredPersistentId (const juce::String& archivedPersistentId,
     const auto& restoredPersistentId = audioModification->getPersistentID();
     return restoredPersistentId.empty() ? juce::String()
                                         : juce::String::fromUTF8 (restoredPersistentId.c_str());
-}
-
-juce::var floatVectorToJson (const std::vector<float>& values)
-{
-    juce::Array<juce::var> array;
-    array.ensureStorageAllocated (static_cast<int> (values.size()));
-    for (const float value : values)
-        array.add (static_cast<double> (value));
-    return juce::var (array);
-}
-
-std::vector<float> floatVectorFromJson (const juce::var& json)
-{
-    std::vector<float> values;
-    if (const auto* array = json.getArray())
-    {
-        values.reserve (static_cast<size_t> (array->size()));
-        for (const auto& element : *array)
-            values.push_back (static_cast<float> (static_cast<double> (element)));
-    }
-    return values;
-}
-
-juce::var slotToJson (const SlotContent& slot)
-{
-    auto* object = new juce::DynamicObject();
-    object->setProperty ("params", parameters::synthParamsToJson (slot.params));
-    object->setProperty ("timbreFile", slot.timbreFile);
-    object->setProperty ("bypass", slot.bypass);
-    object->setProperty ("f0Times", floatVectorToJson (slot.f0Times));
-    object->setProperty ("f0Values", floatVectorToJson (slot.f0Values));
-    if (slot.hasRenderedAudio())
-        object->setProperty ("renderedAudio", floatVectorToJson (*slot.renderedAudio));
-    if (slot.hasRenderedAudio())
-    {
-        object->setProperty ("synthParams", parameters::synthParamsToJson (slot.synthParams));
-        object->setProperty ("synthTimbreFile", slot.synthTimbreFile);
-    }
-    return juce::var (object);
-}
-
-void slotFromJson (SlotContent& slot, const juce::var& json)
-{
-    slot.params = parameters::synthParamsFromJson (json.getProperty ("params", juce::var()));
-    slot.timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
-    slot.bypass = static_cast<bool> (json.getProperty ("bypass", false));
-    slot.f0Times = floatVectorFromJson (json.getProperty ("f0Times", juce::var()));
-    slot.f0Values = floatVectorFromJson (json.getProperty ("f0Values", juce::var()));
-
-    const auto rendered = floatVectorFromJson (json.getProperty ("renderedAudio", juce::var()));
-    if (! rendered.empty())
-    {
-        slot.renderedAudio = std::make_shared<const std::vector<float>> (std::move (rendered));
-        slot.synthParams = parameters::synthParamsFromJson (json.getProperty ("synthParams", juce::var()));
-        slot.synthTimbreFile = json.getProperty ("synthTimbreFile", juce::String()).toString();
-    }
 }
 
 } // namespace
@@ -726,15 +800,11 @@ bool DeepSvcDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& o
         const auto& content = *modification->content;
 
         auto* root = new juce::DynamicObject();
-        root->setProperty ("activeSlot", content.activeSlot);
         auto* window = new juce::DynamicObject();
         window->setProperty ("start", content.sourceWindow.sourceStartSeconds);
         window->setProperty ("end", content.sourceWindow.sourceEndSeconds);
         root->setProperty ("sourceWindow", juce::var (window));
-        juce::Array<juce::var> slotsJson;
-        for (const auto& slot : content.slots)
-            slotsJson.add (slotToJson (slot));
-        root->setProperty ("slots", juce::var (slotsJson));
+        root->setProperty ("segments", archive::segmentsToJson (content.segments));
 
         ok = output.writeString (modification->persistentId) && ok;
         ok = output.writeString (juce::JSON::toString (juce::var (root))) && ok;
@@ -788,10 +858,7 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
             || std::abs (archivedEnd - content.sourceWindow.sourceEndSeconds) > 1.0e-3)
             continue;
 
-        content.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
-        if (const auto* slotsJson = json.getProperty ("slots", juce::var()).getArray())
-            for (int s = 0; s < juce::jmin (2, slotsJson->size()); ++s)
-                slotFromJson (content.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
+        content.segments = archive::segmentsFromJson (json.getProperty ("segments", juce::var()));
 
         ++content.contentRevision;
         // 恢复的内容对宿主是新增的：标记工程已修改，宿主才会保存
@@ -825,7 +892,7 @@ void DeepSvcDocumentController::detectFinished (JobKey key, std::vector<float> f
         times[i] = static_cast<float> (static_cast<double> (i) * 0.01);
 
     juce::ignoreUnused (duration);
-    applyF0 (key.content, key.slot, std::move (times), std::move (f0));
+    applyF0 (key.segment, key.slot, std::move (times), std::move (f0));
 }
 
 void DeepSvcDocumentController::synthFinished (JobKey key,
@@ -856,7 +923,7 @@ void DeepSvcDocumentController::synthFinished (JobKey key,
         pendingSynthTimbres.erase (it);
     }
 
-    applyRenderedAudio (key.content, key.slot,
+    applyRenderedAudio (key.segment, key.slot,
                         std::make_shared<const std::vector<float>> (std::move (output)),
                         synthParams, synthTimbre);
 }
@@ -1052,8 +1119,19 @@ DeepSvcDocumentController::makeProjection (const PlaybackRegion& region) const
             const auto& content = *modification->content;
             projection.contentRevision = content.contentRevision;
             projection.contentDurationSeconds = content.sourceWindow.durationSeconds();
-            // 激活槽位有合成结果且未旁通时，回放走合成音频
-            projection.hasRenderedAudio = content.active().hasRenderedAudio() && ! content.active().bypass;
+
+            // 承载本片段的分段：片段窗口与分段区间重叠最大者
+            if (const auto* segment = content.segmentOverlapping (projection.modificationRange()))
+            {
+                projection.segmentRange = segment->range;
+                projection.segmentKey = SegmentKey {
+                    modification->contentIdentity,
+                    SegmentKey::microsFromSeconds (segment->range.startSeconds)
+                };
+                // 激活槽位有合成结果且未旁通时，回放走合成音频
+                projection.hasRenderedAudio = segment->active().hasRenderedAudio()
+                                           && ! segment->active().bypass;
+            }
         }
     }
     return projection;

@@ -4,13 +4,14 @@
 
 - ARA 2 Event FX 插件，目标宿主为 macOS 上的 Studio One（VST3 必需，AU 顺带构建）。
 - 对事件音频做歌声转换：
-  - 音高检测（RMVPE / FCPE）覆盖音频修改的整个源内容，同源的所有音频块共享一份源内容（OpenTune 的内容模型）；每个 A/B 槽位用各自的估计器分别检测；钢琴卷只显示选中音频块内容窗口内、激活槽位的音高，其他音频块不显示；
+  - 音高检测（RMVPE / FCPE）覆盖焦点音频块所落分段的区间（分段的定义见第 4.1 节）；每个 A/B 槽位用各自的估计器分别检测；钢琴卷只显示该分段内、激活槽位的音高，其他音频块不显示；
   - 从音色库选择参考音频进行合成，合成结果替换事件声音参与回放；激活槽位还没有音高数据时，点击合成会先自动执行音高检测再合成；
   - 参数：F0 估计器、扩散步数、音高偏移、音高微调、CFG 强度、输入增益、输出声码器。
-- A/B 对比：每个音频修改有两个完全独立的槽位，参数、音色、音高检测结果、合成结果、旁通设置互不共享；操作栏的 A|B 切换器切换，分别检测、分别合成、分别旁通（见第 4 节）。
+- 片段独立：每个音频块持有自己的一整套状态，切分、复制、修剪得到的音频块在那一刻按继承规则各得一份副本，此后互不相干（见第 4.1 节）。
+- A/B 对比：每个分段有两个完全独立的槽位，参数、音色、音高检测结果、合成结果、旁通设置互不共享；操作栏的 A|B 切换器切换，分别检测、分别合成、分别旁通（见第 4 节）。
 - 音色库：拖入文件导入，双击重命名，每行右侧删除按钮，右上角打开文件夹图标，与目录双向同步。
 - 推理在插件进程内执行（`native/` 编译为 Rust 静态库直接链入插件，使用 yingmusic crate），模型进程级加载一次、全部插件实例复用；模型权重打入插件 bundle，libsoxr 等依赖全部静态链接，插件自包含。
-- 插件的一切状态随工程持久化（见第 4.2 节），归档版本 0，不兼容任何其他格式。
+- 插件的一切状态随工程持久化（见第 4.2 节），归档版本 1，不兼容任何其他格式。
 
 ## 2. 插件侧架构：一一对应 OpenTune 源码
 
@@ -38,6 +39,7 @@
 - 歌声转换的检测与合成由按钮触发；OpenTune 的对应物是自动触发的 F0 提取与渲染服务（`Source/Services/`、`Source/Render/`、`Source/Runtime/`）。推理代码在 `native/`（Rust，yingmusic crate），编译为静态库经 C ABI 在插件进程内直接调用，与 OpenTune 的进程内推理一致；C ABI 定义在 `native/src/ffi.rs`。
 - 音色库是歌声转换的独有功能（参考音频选择），占据界面左栏。
 - A/B 双槽位是歌声转换的独有功能（两套参数的对比试听），OpenTune 无对应物；槽位切换的交叉淡化沿用渲染器的交叉淡入（`Source/ARA/OpenTunePlaybackRenderer.cpp`）。
+- 状态按分段挂载（第 4.1 节）：OpenTune 的一个音频修改只有一套内容，本插件把内容按修改内部时间划分为分段，每个分段一套状态。分段布局变化时的继承沿用 OpenTune 的 `copyContentRange`（`Source/PluginProcessor.cpp`）：音频按样本区间切片、音高曲线平移到本地区间、其余设置整体拷贝。
 - 归档记录为 persistentID + JSON 字符串，推理结果（音高、合成音频）直接入库；OpenTune 的记录为 persistentID + XML，渲染结果不入库、恢复后由渲染服务重建。见第 4.2 节。
 - 编辑焦点解析在 OpenTune 的 focused → lastActive → earliest 链上多一级：lastActive 为空（新建实例）时落在本实例渲染器被宿主分配的音频块上，即 Event FX 所在的音频事件，不会落到其他音频块。
 - 宿主选区存在共享文档控制器里，可能残留上一个编辑器会话选中的音频块；编辑器只把自己创建之后到达的选区通知当作焦点（文档控制器维护选区更新计数，编辑器记录创建时的计数）。
@@ -46,24 +48,37 @@
 
 ## 4. 状态管理与持久化
 
-### 4.1 A/B 槽位
+### 4.1 内容分段与 A/B 槽位
 
-每个音频修改的内容包含两个完全独立的槽位（A、B）与当前激活槽位。槽位之间零共享，各自持有：
+一个音频修改的内容被划分为若干**分段**。分段是修改内部时间上的一个区间，边界由该修改下所有音频块的内容窗口端点决定：把所有窗口的起点与终点取并集作为边界，相邻边界之间被至少一个窗口覆盖的区间成为一个分段。宿主每次编辑事务结束、以及音频块增删与属性变化时重新划分（`Source/Content/Segmentation.h`）。
 
-- 源 PCM 缓存；
+状态挂在分段上。每个分段持有两个完全独立的槽位（A、B）与当前激活槽位，槽位之间零共享，各自持有：
+
 - params：7 个合成参数的当前编辑值；
 - synthParams：上次合成时的参数快照；
 - timbreFile：音色引用；
-- f0Times / f0Values：用该槽位的估计器对源音频的检测结果；
-- renderedAudio：用该槽位的参数与音色合成的结果；
+- f0Times / f0Values：用该槽位的估计器对本分段区间的检测结果，时间轴为分段本地时间；
+- renderedAudio：用该槽位的参数与音色对本分段区间合成的结果，覆盖分段区间；
 - bypass：该槽位是否直通原声。
 
-行为规则：
+源 PCM 缓存挂在修改上，由音频文件唯一决定，所有分段共享同一份不可变缓存。
 
-- 操作栏的 A|B 切换器切换激活槽位，每个音频修改各自记住激活槽位；切换时参数面板、钢琴卷音高、旁通按钮、回放音频全部切到新槽位，渲染器在块边界做 5ms 等增益交叉淡化（沿用 `Source/ARA/OpenTunePlaybackRenderer.cpp` 的交叉淡入）。
-- APVTS 是激活槽位的编辑面：切换槽位时把新槽位的 params 推进 APVTS，编辑时写回激活槽位，两边始终同步。
-- 检测与合成任务携带槽位索引，完成时写回发起时的槽位；切换槽位不影响进行中的任务。
+继承规则：分段布局变化时，每个新区间从旧布局中重叠最大的分段深拷贝继承状态；音高曲线平移到新区间的本地时间并裁剪，合成音频截取新区间覆盖的样本区段，参数、音色、旁通、激活槽位整体拷贝。对应 OpenTune 的 `copyContentRange`（`Source/PluginProcessor.cpp`：音频按样本区间切片、音高曲线平移到本地区间、其余设置整体拷贝）。
+
+由此得到的行为：
+
+- 切分音频块，切点成为分段边界，两半各得切分那一刻完整状态的一份副本，此后各自检测、各自合成、各自旁通，互不相干。
+- 修剪音频块窗口，端点变化产生新的分段划分，状态跟随并按新区间裁剪。
+- 原样复制且两份窗口完全相同时，两份落在同一个分段上，表现为镜像；其中任意一份被修剪后立即分开。
+- 分段布局重建时，落在已消失分段上的进行中任务被取消，结果不会写到不存在的分段。
+
+其余行为规则：
+
+- 操作栏的 A|B 切换器切换激活槽位，每个分段各自记住激活槽位；切换时参数面板、钢琴卷音高、旁通按钮、回放音频全部切到新槽位，渲染器在块边界做 5ms 等增益交叉淡化（沿用 `Source/ARA/OpenTunePlaybackRenderer.cpp` 的交叉淡入）。
+- 编辑器焦点音频块所落的分段是界面的读写目标：APVTS 是该分段激活槽位的编辑面，切换焦点时把新分段的 params 推进 APVTS，编辑时写回，两边始终同步。
+- 检测与合成任务携带分段与槽位索引，完成时写回发起时的分段与槽位；切换焦点或槽位不影响进行中的任务。
 - 激活槽位旁通开启或无合成结果时，该音频块回放原声。
+- 回放取样：合成音频的时间原点是分段起点，源音频的时间原点是源窗口起点。
 
 ### 4.2 持久化
 
@@ -71,18 +86,18 @@
 
 | 状态 | 机制 |
 | --- | --- |
-| 两个槽位的完整数据与激活槽位（每个音频修改） | ARA 归档 |
+| 每个音频修改的全部分段（区间端点、两个槽位的完整数据、激活槽位） | ARA 归档 |
 | 当前参数值（7 个 APVTS 参数） | 宿主 VST3 state chunk |
 | 音色库文件 | 磁盘目录 |
 
 ARA 归档对应 OpenTune 的 `serializeAudioModificationContent` / `restoreAudioModificationContent` / `doStoreObjectsToStream` / `doRestoreObjectsFromStream`（`Source/ARA/OpenTuneDocumentController.cpp`）：
 
-- 每个音频修改一条记录：persistentID + 自描述 JSON 字符串（OpenTune 用 XML）。
-- JSON 结构：`activeSlot`、`sourceWindow`（sourcePersistentId、startSeconds、durationSeconds）、`slots[2]`（params、synthParams、timbreFile、pitchCurve {hopSize、sampleRate、f0Base64}、renderedAudioBase64、bypass）。
+- 每个音频修改一条记录：persistentID + 自描述 JSON 字符串（OpenTune 用 XML）。编解码在 `Source/Content/ContentArchive.h`。
+- JSON 结构：`sourceWindow`（start、end）、`segments[]`，每个分段含 `start`、`duration`、`activeSlot`、`slots[2]`（params、synthParams、timbreFile、synthTimbreFile、f0Times、f0Values、renderedAudio、bypass）。分段的区间端点即分段身份，随归档持久，恢复时无需匹配。
 - 推理结果（音高、合成音频）直接入库。OpenTune 的渲染结果是确定性 DSP，恢复后由渲染服务重建；本插件的扩散采样无种子（`yingmusic-svc-mlx/src/core.rs:590`），重跑得到的是不同的随机采样，推理结果必须入库。
-- 恢复：filter 映射 persistentID，解析 JSON，校验 sourceWindow 与当前源一致，原子替换 content；记录无法映射或目标不存在则跳过该条，仅数据损坏才整体失败。
-- 脏标记：任何入库状态变化（检测完成、合成完成、槽位切换、旁通切换、参数编辑）后调 `audioModification->notifyContentChanged`（OpenTune 在每次入库状态变化后调用同一接口），宿主才知道工程已修改并保存。
-- 归档版本 0，不兼容任何其他格式。
+- 恢复：filter 映射 persistentID，解析 JSON，校验 sourceWindow 与当前源一致，装载分段数组并按起点排序；记录无法映射或目标不存在则跳过该条，仅数据损坏才整体失败。
+- 脏标记：任何入库状态变化（检测完成、合成完成、槽位切换、旁通切换、参数编辑、分段划分变化）后调 `audioModification->notifyContentChanged`（OpenTune 在每次入库状态变化后调用同一接口），宿主才知道工程已修改并保存。
+- 归档版本 1，不兼容任何其他格式。
 
 ### 4.3 宿主旁通
 
@@ -152,7 +167,7 @@ ARA 归档对应 OpenTune 的 `serializeAudioModificationContent` / `restoreAudi
 | 输入增益 (dB) | -12 – +3 | 0.5 | -2 |
 | 输出声码器 | pupu-vocoder (level 1) / pc-nsf-hifigan (level 2) | — | pc-nsf-hifigan (level 2) |
 
-音高偏移附 -12 / +12 快捷按钮。全部控件绑定 APVTS。参数为每个 A/B 槽位各自一份，APVTS 是激活槽位的编辑面（见第 4.1 节）。
+音高偏移附 -12 / +12 快捷按钮。全部控件绑定 APVTS。参数为每个分段的每个 A/B 槽位各自一份，APVTS 是焦点分段激活槽位的编辑面（见第 4.1 节）。
 
 ### 6.5 钢琴卷
 

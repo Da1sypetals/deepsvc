@@ -127,8 +127,8 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     bypassButton.onClick = [this]
     {
         if (auto* dc = documentController())
-            if (presentedContentKey.isValid() && displayedSlot >= 0)
-                dc->setSlotBypass (presentedContentKey, displayedSlot, bypassButton.getToggleState());
+            if (presentedSegmentKey.isValid() && displayedSlot >= 0)
+                dc->setSlotBypass (presentedSegmentKey, displayedSlot, bypassButton.getToggleState());
     };
 
     playbackIndicator.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -180,8 +180,8 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     timbrePanel.onSelectionChanged = [this] (const juce::String& timbre)
     {
         if (auto* dc = documentController())
-            if (presentedContentKey.isValid() && displayedSlot >= 0 && timbre.isNotEmpty())
-                dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
+            if (presentedSegmentKey.isValid() && displayedSlot >= 0 && timbre.isNotEmpty())
+                dc->applyTimbreFile (presentedSegmentKey, displayedSlot, timbre);
     };
 
     // 用户手动改变视口时记入会话记忆
@@ -376,6 +376,8 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     {
         PianoRollPlacementIdentity identity;
         TimelineContentPlacement placement;
+        SegmentKey segmentKey;
+        SegmentRange segmentRange;
     };
     std::vector<RegionEntry> entries;
     for (const auto& projection : dc->getPlaybackRegionProjections())
@@ -390,6 +392,8 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
         entry.identity = PianoRollPlacementIdentity { projection.contentKey, localProjection };
         entry.placement.contentKey = projection.contentKey;
         entry.placement.projection = localProjection;
+        entry.segmentKey = projection.segmentKey;
+        entry.segmentRange = projection.segmentRange;
         if (projection.displayColour.has_value())
             entry.placement.displayColour = *projection.displayColour;
         entries.push_back (std::move (entry));
@@ -404,6 +408,8 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
         }
         presentedPlacementIdentity.reset();
         presentedContentKey = ContentKey {};
+        presentedSegmentKey = SegmentKey {};
+        presentedSegmentRange = SegmentRange {};
         presentedContentRevision = 0;
         pianoRoll.setEditedContent ({}, {});
         pianoRoll.setTimelineContentPlacements ({});
@@ -500,13 +506,16 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     const auto activeIt = std::find_if (entries.begin(), entries.end(),
                                         [&] (const RegionEntry& e)
                                         { return e.identity == *activeIdentity; });
+    const auto activeSegmentKey = activeIt->segmentKey;
+    const auto activeSegmentRange = activeIt->segmentRange;
     std::vector<TimelineContentPlacement> placements;
     placements.push_back (activeIt->placement);
     for (auto& e : entries)
         if (&e != &*activeIt)
             placements.push_back (std::move (e.placement));
 
-    const bool identityChanged = activeIdentity != presentedPlacementIdentity;
+    const bool identityChanged = activeIdentity != presentedPlacementIdentity
+                              || activeSegmentKey != presentedSegmentKey;
     if (identityChanged && presentedPlacementIdentity.has_value())
         rememberPresentedPianoRollViewport();
 
@@ -516,6 +525,10 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
 
     pianoRoll.setTimelineContentPlacements (std::move (placements));
     pianoRoll.setEditedContent (activeIdentity->contentKey, activeIdentity->projection);
+
+    presentedContentKey = activeIdentity->contentKey;
+    presentedSegmentKey = activeSegmentKey;
+    presentedSegmentRange = activeSegmentRange;
 
     // 切换放置：有记忆视口则恢复，否则重置缩放标记后适配（与 OpenTune 一致）
     if (identityChanged)
@@ -553,7 +566,6 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     }
 
     presentedPlacementIdentity = activeIdentity;
-    presentedContentKey = activeIdentity->contentKey;
 }
 
 void DeepSvcEditor::rememberPresentedPianoRollViewport()
@@ -583,15 +595,20 @@ void DeepSvcEditor::pushEditedContentData()
     std::vector<float> f0Values;
     std::shared_ptr<const juce::AudioBuffer<float>> audio;
 
-    if (const auto* content = dc->findContent (presentedContentKey))
+    // 钢琴卷按内容时间（源窗口起点为 0）寻址；分段的音高存的是分段本地时间，
+    // 推送时加上分段起点偏移（docs/ara.md 第 6.5 节）
+    if (const auto* segment = dc->findSegment (presentedSegmentKey))
     {
-        // 钢琴卷永远显示激活槽位的原音频波形与原音频音高（docs/ara.md 第 6.5 节）。
-        // 源音频经 readSourceAudio 按需物化：工程重开后缓存为空，首次推送时从宿主读取
-        const auto& slot = content->active();
-        f0Times = slot.f0Times;
+        const auto& slot = segment->active();
+        const auto offset = static_cast<float> (segment->range.startSeconds);
+        f0Times.reserve (slot.f0Times.size());
+        for (const float time : slot.f0Times)
+            f0Times.push_back (time + offset);
         f0Values = slot.f0Values;
-        audio = dc->readSourceAudio (presentedContentKey, content->activeSlot);
     }
+
+    // 波形：修改级源音频，工程重开后缓存为空，首次推送时从宿主读取
+    audio = dc->readSourceAudio (presentedContentKey);
 
     pianoRoll.updateEditedContentData (std::move (audio), std::move (f0Times),
                                        std::move (f0Values), revision);
@@ -607,16 +624,16 @@ void DeepSvcEditor::updateJobStatusDisplay()
     bool slotBypass = false;
     juce::String playbackText;
 
-    if (dc != nullptr && presentedContentKey.isValid())
+    if (dc != nullptr && presentedSegmentKey.isValid())
     {
-        if (const auto* content = dc->findContent (presentedContentKey))
+        if (const auto* segment = dc->findSegment (presentedSegmentKey))
         {
             // 激活槽位被外部改变（归档恢复等）时重新同步界面
-            if (displayedSlot != content->activeSlot)
+            if (displayedSlot != segment->activeSlot)
                 syncUiFromActiveSlot();
 
-            const auto& slot = content->active();
-            status = dc->jobStatusFor (presentedContentKey, content->activeSlot);
+            const auto& slot = segment->active();
+            status = dc->jobStatusFor (presentedSegmentKey, segment->activeSlot);
             hasRendered = slot.hasRenderedAudio();
             slotBypass = slot.bypass;
 
@@ -634,7 +651,7 @@ void DeepSvcEditor::updateJobStatusDisplay()
     }
 
     const bool active = isJobActive (status);
-    const bool hasContent = presentedContentKey.isValid();
+    const bool hasContent = presentedSegmentKey.isValid();
 
     detectButton.setEnabled (hasContent && ! active);
     synthButton.setEnabled (hasContent && ! active);
@@ -690,24 +707,18 @@ void DeepSvcEditor::overviewNavigateRequested (double visibleStartSeconds, doubl
 
 void DeepSvcEditor::startDetect()
 {
-    if (! presentedPlacementIdentity.has_value())
-        return;
-
     auto* dc = documentController();
-    if (dc == nullptr || displayedSlot < 0)
+    if (dc == nullptr || ! presentedSegmentKey.isValid() || displayedSlot < 0)
         return;
 
     const auto estimator = parameters::makeSynthParams (audioProcessor.apvts).f0Estimator;
-    dc->requestDetect (presentedContentKey, displayedSlot, estimator);
+    dc->requestDetect (presentedSegmentKey, displayedSlot, estimator);
 }
 
 void DeepSvcEditor::startSynth()
 {
-    if (! presentedPlacementIdentity.has_value())
-        return;
-
     auto* dc = documentController();
-    if (dc == nullptr || displayedSlot < 0)
+    if (dc == nullptr || ! presentedSegmentKey.isValid() || displayedSlot < 0)
         return;
 
     const auto timbre = timbrePanel.selectedTimbre();
@@ -722,12 +733,12 @@ void DeepSvcEditor::startSynth()
 
     // 激活槽位还没有音高数据时先执行音高检测：引擎队列按提交顺序串行执行，
     // 检测完成后才轮到合成（docs/ara.md 第 6.2 节）
-    if (const auto* content = dc->findContent (presentedContentKey))
-        if (content->slots[static_cast<size_t> (displayedSlot)].f0Values.empty())
-            dc->requestDetect (presentedContentKey, displayedSlot, params.f0Estimator);
+    if (const auto* segment = dc->findSegment (presentedSegmentKey))
+        if (segment->slots[static_cast<size_t> (displayedSlot)].f0Values.empty())
+            dc->requestDetect (presentedSegmentKey, displayedSlot, params.f0Estimator);
 
-    dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
-    dc->requestSynth (presentedContentKey, displayedSlot,
+    dc->applyTimbreFile (presentedSegmentKey, displayedSlot, timbre);
+    dc->requestSynth (presentedSegmentKey, displayedSlot,
                       timbreLibrary.fileFor (timbre).getFullPathName(),
                       params);
 }
@@ -735,32 +746,32 @@ void DeepSvcEditor::startSynth()
 void DeepSvcEditor::cancelJobs()
 {
     if (auto* dc = documentController())
-        if (presentedContentKey.isValid() && displayedSlot >= 0)
-            dc->cancelJobs (presentedContentKey, displayedSlot);
+        if (presentedSegmentKey.isValid() && displayedSlot >= 0)
+            dc->cancelJobs (presentedSegmentKey, displayedSlot);
 }
 
 void DeepSvcEditor::switchToSlot (int slot)
 {
     auto* dc = documentController();
-    if (dc == nullptr || ! presentedContentKey.isValid())
+    if (dc == nullptr || ! presentedSegmentKey.isValid())
         return;
 
-    dc->setActiveSlot (presentedContentKey, slot);
+    dc->setActiveSlot (presentedSegmentKey, slot);
     syncUiFromActiveSlot();
 }
 
 void DeepSvcEditor::syncUiFromActiveSlot()
 {
     auto* dc = documentController();
-    if (dc == nullptr || ! presentedContentKey.isValid())
+    if (dc == nullptr || ! presentedSegmentKey.isValid())
         return;
 
-    const auto* content = dc->findContent (presentedContentKey);
-    if (content == nullptr)
+    const auto* segment = dc->findSegment (presentedSegmentKey);
+    if (segment == nullptr)
         return;
 
-    displayedSlot = content->activeSlot;
-    const auto& slot = content->active();
+    displayedSlot = segment->activeSlot;
+    const auto& slot = segment->active();
 
     slotAButton.setToggleState (displayedSlot == 0, juce::dontSendNotification);
     slotBButton.setToggleState (displayedSlot == 1, juce::dontSendNotification);
@@ -786,8 +797,8 @@ void DeepSvcEditor::parameterChanged (const juce::String&, float)
     }
 
     if (auto* dc = documentController())
-        if (presentedContentKey.isValid() && displayedSlot >= 0)
-            dc->applySlotParams (presentedContentKey, displayedSlot,
+        if (presentedSegmentKey.isValid() && displayedSlot >= 0)
+            dc->applySlotParams (presentedSegmentKey, displayedSlot,
                                  parameters::makeSynthParams (audioProcessor.apvts));
 }
 

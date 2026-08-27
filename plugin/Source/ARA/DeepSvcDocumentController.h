@@ -39,6 +39,9 @@ public:
         std::optional<juce::Colour> displayColour;
 
         ContentKey contentKey;
+        // 承载本片段的分段：由片段的内容窗口在分段列表中定位
+        SegmentKey segmentKey;
+        SegmentRange segmentRange;
         uint64_t contentRevision { 0 };
         double contentDurationSeconds { 0.0 };
         bool hasRenderedAudio { false };
@@ -58,6 +61,12 @@ public:
         double endInPlaybackTime() const noexcept
         {
             return startInPlaybackTime + durationInPlaybackTime;
+        }
+
+        // 片段覆盖的修改内部时间区间
+        SegmentRange modificationRange() const noexcept
+        {
+            return SegmentRange { startInModificationTime, durationInModificationTime };
         }
 
         // 时间线时间 ↔ content 本地时间（content 0 = sourceWindow 起点）
@@ -95,33 +104,35 @@ public:
 
     // ---- 内容读取（消息线程；渲染器经渲染计划拿数据，不走这里） ----
     const ModificationContent* findContent (ContentKey key) const;
+    // 分段状态：按分段键定位；分段不存在时返回 nullptr
+    const ContentSegment* findSegment (SegmentKey key) const;
     uint64_t readContentRevision (ContentKey key) const;
-    int readActiveSlot (ContentKey key) const;
-    // 槽位源音频（44.1kHz 单声道），首次调用时提取并重采样，之后走缓存
-    std::shared_ptr<const juce::AudioBuffer<float>> readSourceAudio (ContentKey key, int slot);
+    int readActiveSlot (SegmentKey key) const;
+    // 修改的源音频（44.1kHz 单声道，覆盖整个源窗口），首次调用时提取并重采样，之后走缓存
+    std::shared_ptr<const juce::AudioBuffer<float>> readSourceAudio (ContentKey key);
 
-    // ---- 槽位状态（A/B，docs/ara.md 第 4.1 节） ----
-    void setActiveSlot (ContentKey key, int slot);
-    void setSlotBypass (ContentKey key, int slot, bool bypass);
-    void applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile);
-    void applySlotParams (ContentKey key, int slot, const EngineSynthParams& params);
+    // ---- 分段槽位状态（A/B，docs/ara.md 第 4.1 节） ----
+    void setActiveSlot (SegmentKey key, int slot);
+    void setSlotBypass (SegmentKey key, int slot, bool bypass);
+    void applyTimbreFile (SegmentKey key, int slot, const juce::String& timbreFile);
+    void applySlotParams (SegmentKey key, int slot, const EngineSynthParams& params);
 
     // ---- 内容写入（任务完成时调用，消息线程） ----
-    void applyF0 (ContentKey key, int slot, std::vector<float> times, std::vector<float> values);
-    void applyRenderedAudio (ContentKey key,
+    void applyF0 (SegmentKey key, int slot, std::vector<float> times, std::vector<float> values);
+    void applyRenderedAudio (SegmentKey key,
                              int slot,
                              std::shared_ptr<const std::vector<float>> samples,
                              const EngineSynthParams& synthParams,
                              const juce::String& synthTimbreFile);
 
     // ---- 任务入口（消息线程） ----
-    void requestDetect (ContentKey key, int slot, EngineEstimator estimator);
-    void requestSynth (ContentKey key,
+    void requestDetect (SegmentKey key, int slot, EngineEstimator estimator);
+    void requestSynth (SegmentKey key,
                        int slot,
                        const juce::String& timbreAbsolutePath,
                        const EngineSynthParams& params);
-    void cancelJobs (ContentKey key, int slot);
-    JobStatus jobStatusFor (ContentKey key, int slot) const;
+    void cancelJobs (SegmentKey key, int slot);
+    JobStatus jobStatusFor (SegmentKey key, int slot) const;
 
     // ---- ARA 通知 ----
     void didUpdateAudioSourceProperties (juce::ARAAudioSource* audioSource) override;
@@ -184,9 +195,16 @@ private:
     void refreshRegisteredRenderers (const std::vector<DeepSvcPlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
 
-    // 提取槽位的源音频：modification 整个源窗口，重采样到 44.1kHz 单声道并缓存
-    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (AudioModificationState& modification,
-                                                                       int slot);
+    // 提取修改的源音频：整个源窗口，重采样到 44.1kHz 单声道并缓存
+    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (AudioModificationState& modification);
+
+    // 分段定位：按分段键找到可写的分段
+    ContentSegment* findSegmentForWrite (SegmentKey key);
+
+    // 分段划分：按当前所有 playback region 的窗口端点重新切分该修改的分段列表，
+    // 新分段的状态从旧布局中重叠最大的分段深拷贝继承（docs/ara.md 第 4.1 节）
+    void reconcileSegments (AudioModificationState& modification);
+    void reconcileAllSegments();
 
     // 对应 OpenTune 的 notifyContentChanged 调用点（OpenTuneDocumentController.cpp 第 1877 行等）：
     // 入库状态变化后通知宿主工程已修改，宿主才会保存

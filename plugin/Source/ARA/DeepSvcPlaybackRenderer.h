@@ -53,9 +53,12 @@ private:
     struct RenderItem
     {
         ContentKey contentKey;
-        // 合成音频（44.1kHz 单声道，覆盖整个 sourceWindow）；激活槽位未合成或被旁通时为 null
+        // 承载本片段的分段的合成音频（44.1kHz 单声道，覆盖分段区间）；
+        // 分段激活槽位未合成或被旁通时为 null
         std::shared_ptr<const std::vector<float>> audio;
-        // 源音频（44.1kHz 单声道），宿主旁通时渲染
+        // 分段区间在修改内部时间上的起点，合成音频的样本 0 对应该时刻
+        double segmentStartSeconds = 0.0;
+        // 源音频（44.1kHz 单声道，覆盖整个源窗口），宿主旁通时渲染
         std::shared_ptr<const juce::AudioBuffer<float>> sourceAudio;
         double timelineStartSeconds = 0.0;
         double timelineDurationSeconds = 0.0;

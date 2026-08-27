@@ -261,6 +261,8 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
 
         const float* audioData = nullptr;
         size_t audioNumSamples = 0;
+        // 合成音频的时间原点是分段起点，源音频的原点是源窗口起点
+        double audioTimeOrigin = 0.0;
         if (useSourceAudio)
         {
             if (item.sourceAudio != nullptr && item.sourceAudio->getNumSamples() > 0)
@@ -273,6 +275,7 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
         {
             audioData = item.audio->data();
             audioNumSamples = item.audio->size();
+            audioTimeOrigin = item.segmentStartSeconds;
         }
         if (audioData == nullptr)
             continue;
@@ -301,7 +304,8 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
                     + static_cast<double> (sample) / hostSampleRate;
                 const double contentTime = item.contentStartSeconds
                     + (playbackTime - item.timelineStartSeconds) * contentRatio;
-                dest[destinationStart + sample] += readContentSample (audioData, audioNumSamples, contentTime);
+                dest[destinationStart + sample] += readContentSample (audioData, audioNumSamples,
+                                                                      contentTime - audioTimeOrigin);
             }
         }
     }
@@ -340,14 +344,21 @@ DeepSvcPlaybackRenderer::buildRenderPlan() const
         if (content == nullptr)
             continue;
 
-        const auto& slot = content->active();
-
         RenderItem item;
         item.contentKey = projection.contentKey;
-        item.sourceAudio = slot.sourceAudio;
-        // 激活槽位有合成结果且未旁通时回放合成音频
-        if (slot.hasRenderedAudio() && ! slot.bypass)
-            item.audio = slot.renderedAudio;
+        item.sourceAudio = content->sourceAudio;
+
+        // 承载本片段的分段：其激活槽位有合成结果且未旁通时回放合成音频
+        if (const auto* segment = content->segmentOverlapping (projection.modificationRange()))
+        {
+            const auto& slot = segment->active();
+            if (slot.hasRenderedAudio() && ! slot.bypass)
+            {
+                item.audio = slot.renderedAudio;
+                item.segmentStartSeconds = segment->range.startSeconds;
+            }
+        }
+
         item.timelineStartSeconds = projection.startInPlaybackTime;
         item.timelineDurationSeconds = projection.durationInPlaybackTime;
         item.contentStartSeconds = projection.startInModificationTime;

@@ -32,6 +32,32 @@ struct ContentKey
     }
 };
 
+// 标识一个分段：内容根 + 分段区间起点（修改内部时间，微秒取整）。
+// 分段区间随归档持久，起点在同一个修改内唯一（分段互不重叠）
+struct SegmentKey
+{
+    ContentKey content;
+    int64_t startMicros { 0 };
+
+    bool isValid() const noexcept { return content.isValid(); }
+    bool operator== (const SegmentKey& rhs) const noexcept
+    {
+        return content == rhs.content && startMicros == rhs.startMicros;
+    }
+    bool operator!= (const SegmentKey& rhs) const noexcept { return ! (*this == rhs); }
+    bool operator< (const SegmentKey& rhs) const noexcept
+    {
+        if (content != rhs.content)
+            return content < rhs.content;
+        return startMicros < rhs.startMicros;
+    }
+
+    static int64_t microsFromSeconds (double seconds) noexcept
+    {
+        return static_cast<int64_t> (seconds * 1.0e6 + (seconds >= 0.0 ? 0.5 : -0.5));
+    }
+};
+
 } // namespace deepsvc
 
 namespace std
@@ -43,6 +69,17 @@ struct hash<deepsvc::ContentKey>
     {
         size_t h = std::hash<uint8_t> {} (static_cast<uint8_t> (key.domainKind));
         h ^= std::hash<uint64_t> {} (key.objectId) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+template <>
+struct hash<deepsvc::SegmentKey>
+{
+    size_t operator() (const deepsvc::SegmentKey& key) const noexcept
+    {
+        size_t h = std::hash<deepsvc::ContentKey> {} (key.content);
+        h ^= std::hash<int64_t> {} (key.startMicros) + 0x9e3779b9 + (h << 6) + (h >> 2);
         return h;
     }
 };
