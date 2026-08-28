@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>编辑器界面</title>
+<style>
+  :root {
+    --pink050: #FDF6F8;
+    --pink100: #FBEAF0;
+    --pink200: #F3D3DF;
+    --pink300: #E9B7C9;
+    --pink500: #C96382;
+    --pink600: #B5446E;
+    --pink700: #96365A;
+    --pink900: #5C2438;
+    --ink900: #3A2931;
+    --ink600: #7A5C68;
+    --ink300: #B99AA6;
+    --warning: #C98A2D;
+    --warning-bg: #F9EEDD;
+    --key-white: #FFFFFF;
+    --key-black: #4A3540;
+    --radius: 8px;
+    --control-radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 48px;
+    background: #efe6ea;
+    color: var(--ink900);
+    font: 13px/1.45 "PingFang SC", "Hiragino Sans GB", sans-serif;
+  }
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 650;
+  }
+  .lead {
+    margin: 0 0 20px;
+    color: var(--ink600);
+    font-size: 13px;
+  }
+  .window {
+    background: var(--pink050);
+    border: 1px solid var(--pink200);
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: 0 10px 28px rgba(92, 36, 56, 0.08);
+  }
+  .body {
+    display: grid;
+    grid-template-columns: 168px 1fr 248px;
+    gap: 8px;
+    min-height: 560px;
+  }
+  .panel {
+    background: var(--pink100);
+    border: 1px solid var(--pink200);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px 6px;
+    font-size: 14px;
+    font-weight: 650;
+  }
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--pink600);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .list {
+    padding: 4px 8px 10px;
+  }
+  .row-item {
+    padding: 7px 8px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+  }
+  .row-item.active {
+    background: var(--pink200);
+    color: var(--pink700);
+    font-weight: 600;
+  }
+  .piano-wrap {
+    position: relative;
+    background: var(--pink050);
+    border: 1px solid var(--pink200);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .piano {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    min-height: 420px;
+  }
+  .keys {
+    background: var(--key-white);
+    border-right: 1px solid var(--pink200);
+    position: relative;
+  }
+  .key {
+    height: 22px;
+    border-bottom: 1px solid var(--pink100);
+    font-size: 10px;
+    color: var(--ink600);
+    padding-left: 6px;
+    display: flex;
+    align-items: center;
+  }
+  .key.black {
+    background: var(--key-black);
+    color: #fff;
+    width: 62%;
+    height: 14px;
+    margin-top: -8px;
+    margin-bottom: -6px;
+    position: relative;
+    z-index: 1;
+  }
+  .roll {
+    position: relative;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        var(--pink100) 0 22px,
+        transparent 22px 44px
+      );
+    overflow: hidden;
+  }
+  .lane {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: var(--pink100);
+  }
+  .region {
+    position: absolute;
+    top: 28px;
+    bottom: 88px;
+    left: 18%;
+    width: 38%;
+    background: rgba(181, 68, 110, 0.12);
+    border: 2px solid var(--pink600);
+    border-radius: 2px;
+  }
+  .curve {
+    position: absolute;
+    left: 20%;
+    right: 46%;
+    top: 70px;
+    height: 80px;
+    border: 2px solid var(--pink600);
+    border-bottom: none;
+    border-radius: 80px 80px 0 0;
+    opacity: 0.9;
+  }
+  .playhead {
+    position: absolute;
+    top: 0;
+    bottom: 72px;
+    left: 41%;
+    width: 1px;
+    background: var(--pink900);
+  }
+  .unsynth {
+    position: absolute;
+    top: 28px;
+    bottom: 88px;
+    left: 48%;
+    width: 8%;
+    background: rgba(249, 238, 221, 0.85);
+    border: 1px solid var(--warning);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--warning);
+    font-size: 11px;
+    writing-mode: vertical-rl;
+    letter-spacing: 0.12em;
+  }
+  .overview {
+    height: 72px;
+    border-top: 1px solid var(--pink200);
+    background: var(--pink100);
+    padding: 8px 12px 6px 64px;
+  }
+  .overview-bar {
+    height: 44px;
+    border-radius: 4px;
+    background: linear-gradient(to top, var(--pink300), var(--pink200));
+    position: relative;
+  }
+  .overview-window {
+    position: absolute;
+    left: 16%;
+    width: 42%;
+    top: 0; bottom: 0;
+    border: 2px solid var(--pink600);
+    background: rgba(255,255,255,0.18);
+  }
+  .coord {
+    position: absolute;
+    right: 10px;
+    bottom: 84px;
+    width: 248px;
+    height: 22px;
+    display: grid;
+    grid-template-columns: 64px 48px 58px 78px;
+    background: var(--pink100);
+    border: 1px solid var(--pink200);
+    border-radius: var(--control-radius);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+  .coord span {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 6px;
+    border-right: 1px solid var(--pink200);
+    color: var(--ink900);
+    white-space: nowrap;
+  }
+  .coord span:last-child { border-right: none; }
+  .coord .unit { color: var(--ink600); margin-left: 3px; }
+  .right {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+  .params, .copy { flex: 1; }
+  .field {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    gap: 6px;
+    padding: 3px 12px;
+    font-size: 12px;
+  }
+  .field .k { color: var(--ink600); }
+  .field .v { color: var(--ink900); text-align: right; }
+  .slider {
+    height: 6px;
+    border-radius: 99px;
+    background: var(--pink200);
+    position: relative;
+    margin-top: 6px;
+  }
+  .slider i {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 62%;
+    background: var(--pink600);
+    border-radius: 99px;
+  }
+  .warn {
+    margin: 0 10px 8px;
+    padding: 6px 8px;
+    background: var(--warning-bg);
+    color: var(--warning);
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .ab {
+    display: flex;
+    gap: 0;
+  }
+  .ab button, .btn, .ghost {
+    border: 1px solid var(--pink200);
+    background: #fff;
+    color: var(--ink900);
+    border-radius: var(--control-radius);
+    height: 24px;
+    padding: 0 10px;
+    font: inherit;
+  }
+  .ab button {
+    width: 28px;
+    padding: 0;
+    border-radius: 0;
+  }
+  .ab button:first-child { border-radius: 6px 0 0 6px; }
+  .ab button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .ab button.on {
+    background: var(--pink600);
+    border-color: var(--pink600);
+    color: #fff;
+  }
+  .btn.primary {
+    background: var(--pink600);
+    border-color: var(--pink600);
+    color: #fff;
+    height: 28px;
+    padding: 0 12px;
+    font-weight: 600;
+  }
+  .copy-actions {
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px 12px;
+  }
+  .ghost { background: var(--pink050); }
+  .bottom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    height: 48px;
+    padding: 0 8px;
+  }
+  .process {
+    margin-left: auto;
+    width: 280px;
+    height: 28px;
+    border: 1px solid var(--pink200);
+    border-radius: var(--control-radius);
+    background: var(--pink100);
+    position: relative;
+    overflow: hidden;
+    flex: none;
+  }
+  .process .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 62%;
+    background: var(--pink300);
+  }
+  .process .label {
+    position: relative;
+    z-index: 1;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--pink900);
+    font-weight: 600;
+  }
+  .legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 28px;
+    margin-top: 22px;
+  }
+  .legend div {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 8px;
+    align-items: start;
+    color: var(--ink600);
+    font-size: 13px;
+  }
+  .legend strong {
+    color: var(--ink900);
+    font-weight: 650;
+  }
+  .caption {
+    padding: 0 12px 8px;
+    color: var(--ink600);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>编辑器界面</h1>
+  <p class="lead">三块状态各管一件事：坐标格管光标位置，过程格管正在进行的任务，当前副本管这个 A/B 槽位里存着什么。</p>
+
+  <div class="window">
+    <div class="body">
+      <aside class="panel">
+        <div class="panel-title"><span><span class="mark">1</span>音色库</span></div>
+        <div class="list">
+          <div class="row-item active">ref-male.wav</div>
+          <div class="row-item">ref-soft.wav</div>
+          <div class="row-item">choir.wav</div>
+        </div>
+        <p class="caption">下一次合成要用的参考音频在这里选。</p>
+      </aside>
+
+      <section class="piano-wrap">
+        <div class="piano">
+          <div class="keys">
+            <div class="key">C5</div>
+            <div class="key black"></div>
+            <div class="key">A4</div>
+            <div class="key">G4</div>
+            <div class="key black"></div>
+            <div class="key">E4</div>
+            <div class="key">D4</div>
+            <div class="key black"></div>
+            <div class="key">C4</div>
+            <div class="key">B3</div>
+            <div class="key black"></div>
+            <div class="key">G3</div>
+            <div class="key">F3</div>
+            <div class="key">E3</div>
+            <div class="key black"></div>
+            <div class="key">C3</div>
+          </div>
+          <div class="roll">
+            <div class="region"></div>
+            <div class="curve"></div>
+            <div class="unsynth">尚未合成</div>
+            <div class="playhead"></div>
+            <div class="coord" title="四列像素宽度固定，数值在列内靠右">
+              <span>03:12.47<span class="unit">秒</span></span>
+              <span>C#4</span>
+              <span>+12<span class="unit">音分</span></span>
+              <span>277.2<span class="unit">Hz</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="overview">
+          <div class="overview-bar"><div class="overview-window"></div></div>
+        </div>
+        <div class="panel-title" style="position:absolute;left:60px;top:6px;padding:0;background:transparent;border:none;">
+          <span><span class="mark">2</span>钢琴卷</span>
+        </div>
+        <div class="panel-title" style="position:absolute;right:10px;bottom:96px;padding:0;background:transparent;">
+          <span><span class="mark">3</span>坐标格</span>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="panel params">
+          <div class="panel-title"><span><span class="mark">4</span>合成参数</span></div>
+          <p class="caption">将要送去下一次合成的编辑值。</p>
+          <div class="field"><span class="k">F0 估计器</span><span class="v">RMVPE</span></div>
+          <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
+          <div class="field" style="display:block;padding-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;"><span class="k">音高偏移</span><span class="v">+12.0</span></div>
+            <div class="slider"><i></i></div>
+          </div>
+          <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
+          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
+          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
+          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
+        </div>
+
+        <div class="panel copy">
+          <div class="panel-title">
+            <span><span class="mark">5</span>当前副本</span>
+            <div class="ab"><button class="on">A</button><button>B</button></div>
+          </div>
+          <div class="warn">编辑中的参数尚未写入这个副本</div>
+          <div class="field"><span class="k">回放</span><span class="v">合成音频</span></div>
+          <div class="field"><span class="k">音高</span><span class="v">已检测</span></div>
+          <div class="field"><span class="k">音色</span><span class="v">ref-male.wav</span></div>
+          <div class="field"><span class="k">F0 估计器</span><span class="v">RMVPE</span></div>
+          <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
+          <div class="field"><span class="k">音高偏移</span><span class="v">+12.0 半音</span></div>
+          <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
+          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
+          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
+          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
+          <div class="field"><span class="k">覆盖区间</span><span class="v">3.00 – 5.00 秒</span></div>
+          <div class="field"><span class="k">合成耗时</span><span class="v">12.3 秒</span></div>
+          <div class="copy-actions">
+            <button class="ghost">旁通</button>
+            <button class="ghost">清空</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="bottom">
+      <span class="mark">6</span>
+      <button class="btn primary">音高检测</button>
+      <button class="btn primary">开始合成</button>
+      <button class="btn">取消</button>
+      <div class="process">
+        <div class="fill"></div>
+        <div class="label"><span class="mark" style="margin-right:8px;">7</span>扩散合成 62%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div><span class="mark">1</span><span><strong>音色库</strong> 选择参考音频，写入当前副本下一次合成要用的音色。</span></div>
+    <div><span class="mark">2</span><span><strong>钢琴卷</strong> 看波形、音高曲线、尚未合成的窗口缺口。</span></div>
+    <div><span class="mark">3</span><span><strong>坐标格</strong> 宽 248 像素，永远四列：时间、音名、音分、频率。数字变化时格子宽度不变。</span></div>
+    <div><span class="mark">4</span><span><strong>合成参数</strong> 你正在拧的旋钮，下一次点「开始合成」才送进引擎。</span></div>
+    <div><span class="mark">5</span><span><strong>当前副本</strong> 这个 A/B 槽位里已经写好的合成结果，以及当时用过的全部参数。回放三种取值：合成音频、空（宿主原声）、原声（旁通）。旁通与清空作用在这个副本上。</span></div>
+    <div><span class="mark">6</span><span><strong>底栏动词</strong> 音高检测、开始合成、取消。取消只在任务进行中可点。</span></div>
+    <div><span class="mark">7</span><span><strong>过程格</strong> 宽 280 像素，永远占着底栏右侧。排队、加载、阶段进度、失败、未选音色，全部写在这一格。合成成功后这一格变回空白，耗时写到当前副本里。</span></div>
+  </div>
+</div>
+</body>
+</html>
