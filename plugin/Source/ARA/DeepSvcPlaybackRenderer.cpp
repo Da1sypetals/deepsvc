@@ -261,7 +261,7 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
 
         const float* audioData = nullptr;
         size_t audioNumSamples = 0;
-        // 合成音频的时间原点是分段起点，源音频的原点是源窗口起点
+        // 合成音频的时间原点是覆盖区间起点，源音频的原点是文件起点
         double audioTimeOrigin = 0.0;
         if (useSourceAudio)
         {
@@ -275,7 +275,7 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
         {
             audioData = item.audio->data();
             audioNumSamples = item.audio->size();
-            audioTimeOrigin = item.segmentStartSeconds;
+            audioTimeOrigin = item.synthStartTime;
         }
         if (audioData == nullptr)
             continue;
@@ -340,30 +340,25 @@ DeepSvcPlaybackRenderer::buildRenderPlan() const
         if (! projection.hasValidPlacement() || ! projection.contentKey.isValid())
             continue;
 
-        const auto* content = documentController->findContent (projection.contentKey);
-        if (content == nullptr)
+        const auto* event = documentController->findEvent (projection.contentKey);
+        if (event == nullptr)
             continue;
 
         RenderItem item;
         item.contentKey = projection.contentKey;
-        item.sourceAudio = content->sourceAudio;
+        item.sourceAudio = event->sourceAudio;
 
-        // 承载本片段的分段：其激活槽位有合成结果且未旁通时回放合成音频
-        if (const auto* segment = content->segmentOverlapping (projection.modificationRange()))
+        const auto& slot = event->active();
+        if (slot.hasSynthAudio() && ! slot.bypass)
         {
-            const auto& slot = segment->active();
-            if (slot.hasRenderedAudio() && ! slot.bypass)
-            {
-                item.audio = slot.renderedAudio;
-                item.segmentStartSeconds = segment->range.startSeconds;
-            }
+            item.audio = slot.synthAudio->samples;
+            item.synthStartTime = slot.synthAudio->synthStartTime;
         }
 
         item.timelineStartSeconds = projection.startInPlaybackTime;
         item.timelineDurationSeconds = projection.durationInPlaybackTime;
         item.contentStartSeconds = projection.startInModificationTime;
         item.contentDurationSeconds = projection.durationInModificationTime;
-        item.contentTotalSeconds = projection.contentDurationSeconds;
         nextPlan->items.push_back (std::move (item));
     }
 

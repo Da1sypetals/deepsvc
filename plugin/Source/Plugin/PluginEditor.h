@@ -83,9 +83,6 @@ private:
 
     std::optional<PianoRollPlacementIdentity> presentedPlacementIdentity;
     ContentKey presentedContentKey;
-    // 焦点片段所落的分段：A/B、旁通、参数、音色、任务全部读写这个分段
-    SegmentKey presentedSegmentKey;
-    SegmentRange presentedSegmentRange;
     uint64_t presentedContentRevision = 0;
     // 界面当前展示的槽位；-1 = 尚未同步
     int displayedSlot = -1;

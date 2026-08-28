@@ -24,6 +24,9 @@ struct TimelineContentPlacement
     ContentKey contentKey;
     ContentTimelineProjection projection;
     juce::Colour displayColour { 0xFFB5446E };  // pink600
+    bool hasSynthCoverage { false };
+    double synthStartTime { 0.0 };
+    double synthEndTime { 0.0 };
 
     bool isValid() const noexcept { return contentKey.isValid() && projection.isValid(); }
 };
@@ -107,6 +110,7 @@ private:
     void paintPlacements (juce::Graphics& g);
     void paintWaveform (juce::Graphics& g, const TimelineContentPlacement& placement);
     void paintF0Curve (juce::Graphics& g, const TimelineContentPlacement& placement);
+    void paintUnsynthesized (juce::Graphics& g, const TimelineContentPlacement& placement);
     void paintPlayhead (juce::Graphics& g);
     void paintCoordinateReadout (juce::Graphics& g);
 

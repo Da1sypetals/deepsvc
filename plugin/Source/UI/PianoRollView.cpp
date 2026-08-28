@@ -104,6 +104,9 @@ void PianoRollView::setTimelineContentPlacements (std::vector<TimelineContentPla
                          {
                              return lhs.contentKey == rhs.contentKey
                                  && lhs.displayColour == rhs.displayColour
+                                 && lhs.hasSynthCoverage == rhs.hasSynthCoverage
+                                 && std::abs (lhs.synthStartTime - rhs.synthStartTime) <= 1.0e-9
+                                 && std::abs (lhs.synthEndTime - rhs.synthEndTime) <= 1.0e-9
                                  && std::abs (lhs.projection.timelineStartSeconds - rhs.projection.timelineStartSeconds) <= 1.0e-9
                                  && std::abs (lhs.projection.timelineDurationSeconds - rhs.projection.timelineDurationSeconds) <= 1.0e-9
                                  && std::abs (lhs.projection.contentStartSeconds - rhs.projection.contentStartSeconds) <= 1.0e-9
@@ -613,6 +616,9 @@ void PianoRollView::paint (juce::Graphics& g)
         paintF0Curve (g, *placement);
     }
 
+    for (const auto& placement : placements)
+        paintUnsynthesized (g, placement);
+
     paintKeyBed (g);
     paintRuler (g);
     paintPlayhead (g);
@@ -882,6 +888,60 @@ void PianoRollView::paintF0Curve (juce::Graphics& g, const TimelineContentPlacem
 
     g.setColour (UIColors::pink600);
     g.strokePath (curve, juce::PathStrokeType (2.0f));
+}
+
+void PianoRollView::paintUnsynthesized (juce::Graphics& g, const TimelineContentPlacement& placement)
+{
+    if (! placement.isValid() || ! placement.hasSynthCoverage)
+        return;
+
+    const double windowStart = placement.projection.contentStartSeconds;
+    const double windowEnd = windowStart + placement.projection.contentDurationSeconds;
+    if (windowEnd <= windowStart)
+        return;
+
+    const double uncoveredStarts[] = {
+        windowStart,
+        juce::jmax (windowStart, placement.synthEndTime)
+    };
+    const double uncoveredEnds[] = {
+        juce::jmin (windowEnd, placement.synthStartTime),
+        windowEnd
+    };
+
+    const auto mapper = makeViewMapper();
+    const int top = rulerHeight;
+    const int height = getTimelineContentViewportHeight();
+    const int contentRight = pianoKeyWidth + getTimelineContentViewportWidth();
+
+    juce::Graphics::ScopedSaveState scoped (g);
+    g.reduceClipRegion (pianoKeyWidth, top, contentRight - pianoKeyWidth, height);
+
+    const auto label = juce::String (u8"尚未合成");
+    g.setFont (juce::Font (juce::FontOptions (12.0f)));
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const double fileStart = uncoveredStarts[i];
+        const double fileEnd = uncoveredEnds[i];
+        if (fileEnd <= fileStart)
+            continue;
+
+        const double timelineStart = placement.projection.projectContentTimeToTimeline (fileStart);
+        const double timelineEnd = placement.projection.projectContentTimeToTimeline (fileEnd);
+        const int x1 = mapper.timeToX (timelineStart);
+        const int x2 = mapper.timeToX (timelineEnd);
+        if (x2 <= x1)
+            continue;
+
+        auto bounds = juce::Rectangle<int> (x1, top, x2 - x1, height);
+        g.setColour (UIColors::warningBg.withAlpha (0.72f));
+        g.fillRect (bounds);
+        g.setColour (UIColors::warning);
+        g.drawRect (bounds, 1);
+        if (bounds.getWidth() >= 56)
+            g.drawText (label, bounds, juce::Justification::centred, false);
+    }
 }
 
 void PianoRollView::paintPlayhead (juce::Graphics& g)

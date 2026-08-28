@@ -74,19 +74,17 @@ target_sources(deepsvc PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
 
-    Source/ARA/AudioModificationState.h
-    Source/ARA/AudioSourceRef.h
     Source/ARA/DeepSvcDocumentController.cpp
     Source/ARA/DeepSvcDocumentController.h
     Source/ARA/DeepSvcEditorView.cpp
     Source/ARA/DeepSvcEditorView.h
     Source/ARA/DeepSvcPlaybackRenderer.cpp
     Source/ARA/DeepSvcPlaybackRenderer.h
-    Source/ARA/PlaybackRegion.cpp
-    Source/ARA/PlaybackRegion.h
+    Source/ARA/EventAudioModification.cpp
+    Source/ARA/EventAudioModification.h
 
+    Source/Content/ContentArchive.h
     Source/Content/ContentKey.h
-    Source/Content/ContentStore.h
 
     Source/Engine/EngineBridge.cpp
     Source/Engine/EngineBridge.h
@@ -121,7 +119,6 @@ target_sources(deepsvc PRIVATE
     Source/UI/WaveformMipmap.h
 
     Source/Utils/ContentTimelineProjection.h
-    Source/Utils/SourceWindow.h
     Source/Utils/TimeCoordinate.h
 
     Source/Directories.h

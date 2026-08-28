@@ -1,16 +1,12 @@
 #pragma once
 
 #include <optional>
-#include <vector>
 
 #include <juce_core/juce_core.h>
 
-#include "ContentStore.h"
+#include "../ARA/EventAudioModification.h"
 #include "../State/Parameters.h"
 
-// 分段状态的 JSON 编解码（docs/ara.md 第 4.2 节）。
-// 与 OpenTune 的差异：OpenTune 记录 XML、渲染结果不入库、恢复后由渲染服务重建；
-// 本插件的推理结果（音高、合成音频）直接入库
 namespace deepsvc::archive
 {
 
@@ -35,92 +31,92 @@ inline std::vector<float> floatVectorFromJson (const juce::var& json)
     return values;
 }
 
-inline juce::var slotToJson (const SlotContent& slot)
+inline juce::var slotToJson (const EventSlot& slot)
 {
     auto* object = new juce::DynamicObject();
     object->setProperty ("params", parameters::synthParamsToJson (slot.params));
     object->setProperty ("timbreFile", slot.timbreFile);
     object->setProperty ("bypass", slot.bypass);
-    object->setProperty ("f0Times", floatVectorToJson (slot.f0Times));
-    object->setProperty ("f0Values", floatVectorToJson (slot.f0Values));
-    if (slot.hasRenderedAudio())
+    if (slot.pitchData.has_value())
     {
-        object->setProperty ("renderedAudio", floatVectorToJson (*slot.renderedAudio));
+        auto* pitch = new juce::DynamicObject();
+        pitch->setProperty ("f0Times", floatVectorToJson (slot.pitchData->f0Times));
+        pitch->setProperty ("f0Values", floatVectorToJson (slot.pitchData->f0Values));
+        object->setProperty ("pitchData", juce::var (pitch));
+    }
+    if (slot.hasSynthAudio())
+    {
+        auto* synth = new juce::DynamicObject();
+        synth->setProperty ("samples", floatVectorToJson (*slot.synthAudio->samples));
+        synth->setProperty ("synthStartTime", slot.synthAudio->synthStartTime);
+        synth->setProperty ("synthEndTime", slot.synthAudio->synthEndTime);
+        object->setProperty ("synthAudio", juce::var (synth));
         object->setProperty ("synthParams", parameters::synthParamsToJson (slot.synthParams));
         object->setProperty ("synthTimbreFile", slot.synthTimbreFile);
     }
     return juce::var (object);
 }
 
-inline void slotFromJson (SlotContent& slot, const juce::var& json)
+inline void slotFromJson (EventSlot& slot, const juce::var& json)
 {
     slot.params = parameters::synthParamsFromJson (json.getProperty ("params", juce::var()));
     slot.timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
     slot.bypass = static_cast<bool> (json.getProperty ("bypass", false));
-    slot.f0Times = floatVectorFromJson (json.getProperty ("f0Times", juce::var()));
-    slot.f0Values = floatVectorFromJson (json.getProperty ("f0Values", juce::var()));
 
-    auto rendered = floatVectorFromJson (json.getProperty ("renderedAudio", juce::var()));
-    if (! rendered.empty())
+    const auto pitchJson = json.getProperty ("pitchData", juce::var());
+    if (pitchJson.isObject())
     {
-        slot.renderedAudio = std::make_shared<const std::vector<float>> (std::move (rendered));
-        slot.synthParams = parameters::synthParamsFromJson (json.getProperty ("synthParams", juce::var()));
-        slot.synthTimbreFile = json.getProperty ("synthTimbreFile", juce::String()).toString();
+        PitchData pitch;
+        pitch.f0Times = floatVectorFromJson (pitchJson.getProperty ("f0Times", juce::var()));
+        pitch.f0Values = floatVectorFromJson (pitchJson.getProperty ("f0Values", juce::var()));
+        if (! pitch.f0Times.empty() && pitch.f0Times.size() == pitch.f0Values.size())
+            slot.pitchData = std::move (pitch);
+    }
+
+    const auto synthJson = json.getProperty ("synthAudio", juce::var());
+    if (synthJson.isObject())
+    {
+        auto samples = floatVectorFromJson (synthJson.getProperty ("samples", juce::var()));
+        if (! samples.empty())
+        {
+            SynthAudio synth;
+            synth.samples = std::make_shared<const std::vector<float>> (std::move (samples));
+            synth.synthStartTime = static_cast<double> (synthJson.getProperty ("synthStartTime", 0.0));
+            synth.synthEndTime = static_cast<double> (synthJson.getProperty ("synthEndTime", 0.0));
+            if (synth.isValid())
+            {
+                slot.synthAudio = std::move (synth);
+                slot.synthParams = parameters::synthParamsFromJson (json.getProperty ("synthParams", juce::var()));
+                slot.synthTimbreFile = json.getProperty ("synthTimbreFile", juce::String()).toString();
+            }
+        }
     }
 }
 
-inline juce::var segmentToJson (const ContentSegment& segment)
+inline juce::var eventToJson (const EventAudioModification& event)
 {
-    auto* object = new juce::DynamicObject();
-    object->setProperty ("start", segment.range.startSeconds);
-    object->setProperty ("duration", segment.range.durationSeconds);
-    object->setProperty ("activeSlot", segment.activeSlot);
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("dataRevision", static_cast<juce::int64> (event.dataRevision));
+    root->setProperty ("activeSlot", event.activeSlot);
     juce::Array<juce::var> slotsJson;
-    for (const auto& slot : segment.slots)
+    for (const auto& slot : event.slots)
         slotsJson.add (slotToJson (slot));
-    object->setProperty ("slots", juce::var (slotsJson));
-    return juce::var (object);
+    root->setProperty ("slots", juce::var (slotsJson));
+    return juce::var (root);
 }
 
-inline std::optional<ContentSegment> segmentFromJson (const juce::var& json)
+inline void eventFromJson (EventAudioModification& event, const juce::var& json)
 {
     if (! json.isObject())
-        return std::nullopt;
+        return;
 
-    ContentSegment segment;
-    segment.range.startSeconds = static_cast<double> (json.getProperty ("start", -1.0));
-    segment.range.durationSeconds = static_cast<double> (json.getProperty ("duration", 0.0));
-    if (segment.range.startSeconds < 0.0 || ! segment.range.isValid())
-        return std::nullopt;
-
-    segment.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
+    event.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
     if (const auto* slotsJson = json.getProperty ("slots", juce::var()).getArray())
         for (int s = 0; s < juce::jmin (2, slotsJson->size()); ++s)
-            slotFromJson (segment.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
-    return segment;
-}
-
-// 分段数组的编解码：恢复后按起点升序，与写入顺序一致
-inline juce::var segmentsToJson (const std::vector<ContentSegment>& segments)
-{
-    juce::Array<juce::var> array;
-    for (const auto& segment : segments)
-        array.add (segmentToJson (segment));
-    return juce::var (array);
-}
-
-inline std::vector<ContentSegment> segmentsFromJson (const juce::var& json)
-{
-    std::vector<ContentSegment> segments;
-    if (const auto* array = json.getArray())
-        for (const auto& element : *array)
-            if (auto segment = segmentFromJson (element))
-                segments.push_back (std::move (*segment));
-
-    std::sort (segments.begin(), segments.end(),
-               [] (const ContentSegment& lhs, const ContentSegment& rhs)
-               { return lhs.range.startSeconds < rhs.range.startSeconds; });
-    return segments;
+            slotFromJson (event.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
+    event.dataRevision = static_cast<uint64_t> (
+        static_cast<juce::int64> (json.getProperty ("dataRevision", 0)));
+    ++event.dataRevision;
 }
 
 } // namespace deepsvc::archive

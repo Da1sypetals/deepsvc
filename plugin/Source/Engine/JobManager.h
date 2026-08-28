@@ -5,29 +5,24 @@
 #include <atomic>
 #include <map>
 
-#include "../Content/ContentKey.h"
 #include "EngineBridge.h"
 
-// 任务管理：提交检测/合成任务、按 ContentKey + 槽位追踪任务状态。
-// 对应 OpenTune Source/Inference/F0InferenceService.h 的任务提交与状态追踪部分；
-// 差异（按钮触发、无自动服务）见 docs/ara.md 第 3 节
 namespace deepsvc
 {
 
-// 任务身份：分段 + A/B 槽位。任务完成时写回发起时的分段与槽位（docs/ara.md 第 4.1 节）
 struct JobKey
 {
-    SegmentKey segment;
+    juce::String persistentId;
     int slot = 0;
 
     bool operator== (const JobKey& rhs) const noexcept
     {
-        return segment == rhs.segment && slot == rhs.slot;
+        return persistentId == rhs.persistentId && slot == rhs.slot;
     }
     bool operator< (const JobKey& rhs) const noexcept
     {
-        if (segment != rhs.segment)
-            return segment < rhs.segment;
+        if (persistentId != rhs.persistentId)
+            return persistentId < rhs.persistentId;
         return slot < rhs.slot;
     }
 };
@@ -50,7 +45,6 @@ struct JobStatus
     double fraction = 0.0;
     uint32_t queuePosition = 0;
     juce::String error;
-    // 终态（succeeded）时的耗时秒数；其他状态为 -1
     double elapsedSeconds = -1.0;
 };
 
@@ -60,10 +54,8 @@ public:
     struct Listener
     {
         virtual ~Listener() = default;
-        // 全部在消息线程触发
         virtual void jobStatusChanged (JobKey key, const JobStatus& status) = 0;
         virtual void detectFinished (JobKey key, std::vector<float> f0) = 0;
-        // firstVocoder：提交时请求了第一级声码器输出则非空
         virtual void synthFinished (JobKey key,
                                     std::vector<float> audio,
                                     std::vector<float> firstVocoder,
@@ -73,7 +65,6 @@ public:
     explicit JobManager (Listener& listener);
     ~JobManager() override;
 
-    // 消息线程调用，返回任务 ID；引擎初始化失败时返回 0 并广播失败状态
     uint64_t submitDetect (JobKey key,
                            std::vector<float> pcm,
                            uint32_t sampleRate,
