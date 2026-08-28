@@ -70,6 +70,89 @@ std::vector<float> extractSegmentPcm (const juce::AudioBuffer<float>& sourceAudi
                  count * sizeof (float));
     return pcm;
 }
+
+juce::String ptrHex (const void* p)
+{
+    if (p == nullptr)
+        return "null";
+    return "0x" + juce::String::toHexString (reinterpret_cast<juce::int64> (p));
+}
+
+template <typename Object>
+juce::String pidOf (const Object* object)
+{
+    if (object == nullptr)
+        return "-";
+    const juce::String id (object->getPersistentID());
+    return id.isNotEmpty() ? id : juce::String ("-");
+}
+
+juce::String seqNameOf (const juce::ARARegionSequence* seq)
+{
+    if (seq == nullptr)
+        return "-";
+    const juce::String name (seq->getName());
+    return name.isNotEmpty() ? name : juce::String ("-");
+}
+
+juce::String describeRegion (const juce::ARAPlaybackRegion* region)
+{
+    if (region == nullptr)
+        return "region p=null";
+
+    const auto* mod = region->getAudioModification();
+    const auto* seq = region->getRegionSequence();
+
+    return "region p=" + ptrHex (region)
+         + " mod=" + ptrHex (mod)
+         + " modPid=" + pidOf (mod)
+         + " seq=" + ptrHex (seq)
+         + " seqName=" + seqNameOf (seq)
+         + " win=" + juce::String (region->getStartInAudioModificationTime(), 6)
+         + "+" + juce::String (region->getDurationInAudioModificationTime(), 6)
+         + " place=" + juce::String (region->getStartInPlaybackTime(), 6)
+         + "+" + juce::String (region->getDurationInPlaybackTime(), 6);
+}
+
+juce::String describeMod (const juce::ARAAudioModification* mod)
+{
+    if (mod == nullptr)
+        return "mod p=null";
+
+    const auto* src = mod->getAudioSource();
+    const auto& regions = mod->getPlaybackRegions();
+    return "mod p=" + ptrHex (mod)
+         + " pid=" + pidOf (mod)
+         + " src=" + ptrHex (src)
+         + " srcPid=" + pidOf (src)
+         + " deactivated=" + juce::String (mod->isDeactivatedForUndoHistory() ? 1 : 0)
+         + " regions=" + juce::String (static_cast<int> (regions.size()));
+}
+
+juce::String shadowSummary (const AudioModificationState* state)
+{
+    if (state == nullptr)
+        return "shadow=miss";
+    if (! state->hasContentState())
+        return "shadow=empty pid=" + state->persistentId;
+
+    int rendered = 0;
+    int pitched = 0;
+    for (const auto& segment : state->content->segments)
+        for (const auto& slot : segment.slots)
+        {
+            if (slot.hasRenderedAudio())
+                ++rendered;
+            if (! slot.f0Values.empty())
+                ++pitched;
+        }
+
+    return "shadow=hit pid=" + state->persistentId
+         + " rev=" + juce::String (static_cast<juce::int64> (state->content->contentRevision))
+         + " segs=" + juce::String (static_cast<int> (state->content->segments.size()))
+         + " pitchedSlots=" + juce::String (pitched)
+         + " renderedSlots=" + juce::String (rendered);
+}
 } // namespace
 
 DeepSvcDocumentController::DeepSvcDocumentController (const ARA::PlugIn::PlugInEntry* entry,
@@ -77,10 +160,12 @@ DeepSvcDocumentController::DeepSvcDocumentController (const ARA::PlugIn::PlugInE
     : ARADocumentControllerSpecialisation (entry, instance)
     , jobManager (*this)
 {
+    debugLog ("ara documentController created p=" + ptrHex (this));
 }
 
 DeepSvcDocumentController::~DeepSvcDocumentController()
 {
+    debugLog ("ara documentController destroyed p=" + ptrHex (this));
     // 渲染器生命周期由宿主掌握，可能晚于 DC：先解除所有渲染器对 DC 的引用
     for (auto* renderer : playbackRenderers)
         if (renderer != nullptr)
@@ -494,7 +579,22 @@ void DeepSvcDocumentController::reconcileSegments (AudioModificationState& modif
 
     // 布局未变则不动，避免每次属性更新都重建分段
     if (segmentation::layoutMatches (content.segments, ranges))
+    {
+        debugLog ("ara reconcileSegments skip pid=" + modification.persistentId
+                  + " segs=" + juce::String (static_cast<int> (content.segments.size())));
         return;
+    }
+
+    juce::String oldLayout;
+    for (const auto& segment : content.segments)
+        oldLayout += juce::String (segment.range.startSeconds, 6) + "+"
+                   + juce::String (segment.range.durationSeconds, 6) + ",";
+    juce::String newLayout;
+    for (const auto& range : ranges)
+        newLayout += juce::String (range.startSeconds, 6) + "+"
+                   + juce::String (range.durationSeconds, 6) + ",";
+    debugLog ("ara reconcileSegments rebuild pid=" + modification.persistentId
+              + " old=[" + oldLayout + "] new=[" + newLayout + "]");
 
     // 旧分段上进行中的任务失去写回目标：取消它们
     for (const auto& segment : content.segments)
@@ -526,11 +626,71 @@ void DeepSvcDocumentController::reconcileAllSegments()
         reconcileSegments (modification);
 }
 
+void DeepSvcDocumentController::dumpAraGraph (const juce::String& reason)
+{
+    auto* document = getDocument();
+    debugLog ("ara dump begin reason=" + reason
+              + " shadowMods=" + juce::String (static_cast<int> (audioModifications.size()))
+              + " shadowRegions=" + juce::String (static_cast<int> (playbackRegions.size())));
+
+    if (document == nullptr)
+    {
+        debugLog ("ara dump document=null");
+        return;
+    }
+
+    int hostMods = 0;
+    int hostRegions = 0;
+    for (auto* source : document->getAudioSources())
+    {
+        const auto& mods = source->getAudioModifications();
+        debugLog ("ara dump src p=" + ptrHex (source)
+                  + " pid=" + pidOf (source)
+                  + " deactivated=" + juce::String (source->isDeactivatedForUndoHistory() ? 1 : 0)
+                  + " mods=" + juce::String (static_cast<int> (mods.size())));
+        for (auto* mod : mods)
+        {
+            ++hostMods;
+            debugLog ("ara dump   " + describeMod (mod) + " " + shadowSummary (findAudioModification (mod)));
+            for (auto* region : mod->getPlaybackRegions())
+            {
+                ++hostRegions;
+                debugLog ("ara dump     " + describeRegion (region));
+            }
+        }
+    }
+
+    debugLog ("ara dump end hostMods=" + juce::String (hostMods)
+              + " hostRegions=" + juce::String (hostRegions));
+
+    for (const auto& state : audioModifications)
+    {
+        bool foundInHost = false;
+        if (document != nullptr)
+            for (auto* source : document->getAudioSources())
+                for (auto* mod : source->getAudioModifications())
+                    if (mod == state.audioModification)
+                        foundInHost = true;
+        if (! foundInHost)
+            debugLog ("ara dump orphanShadow p=" + ptrHex (state.audioModification)
+                      + " " + shadowSummary (&state));
+    }
+}
+
 //==============================================================================
 // ARA 通知
 
+void DeepSvcDocumentController::willBeginEditing (juce::ARADocument* document)
+{
+    juce::ignoreUnused (document);
+    debugLog ("ara willBeginEditing");
+    dumpAraGraph ("willBeginEditing");
+}
+
 void DeepSvcDocumentController::didUpdateAudioSourceProperties (juce::ARAAudioSource* audioSource)
 {
+    debugLog ("ara didUpdateAudioSourceProperties p=" + ptrHex (audioSource)
+              + " pid=" + pidOf (audioSource));
     auto& sourceRef = ensureAudioSource (audioSource);
     sourceRef.updateFrom (audioSource);
 
@@ -548,6 +708,9 @@ void DeepSvcDocumentController::didUpdateAudioSourceProperties (juce::ARAAudioSo
 void DeepSvcDocumentController::doUpdateAudioSourceContent (juce::ARAAudioSource* audioSource,
                                                             const juce::ARAContentUpdateScopes scopeFlags)
 {
+    debugLog ("ara doUpdateAudioSourceContent p=" + ptrHex (audioSource)
+              + " pid=" + pidOf (audioSource)
+              + " affectSamples=" + juce::String (scopeFlags.affectSamples() ? 1 : 0));
     // 对应 OpenTuneDocumentController.cpp 的 doUpdateAudioSourceContent：
     // 波形信号没变（只改了名称、颜色、标记等）时保留派生数据
     if (! scopeFlags.affectSamples())
@@ -579,6 +742,8 @@ void DeepSvcDocumentController::doUpdateAudioSourceContent (juce::ARAAudioSource
 
 void DeepSvcDocumentController::willDestroyAudioSource (juce::ARAAudioSource* audioSource)
 {
+    debugLog ("ara willDestroyAudioSource p=" + ptrHex (audioSource)
+              + " pid=" + pidOf (audioSource));
     // 源销毁时，依赖它的修改内容一并失效
     for (auto& modification : audioModifications)
     {
@@ -596,11 +761,63 @@ void DeepSvcDocumentController::willDestroyAudioSource (juce::ARAAudioSource* au
                                         {
                                             return ref.audioSource == audioSource;
                                         }),
-                        audioSources.end());
+                                        audioSources.end());
+}
+
+void DeepSvcDocumentController::didAddAudioModificationToAudioSource (
+    juce::ARAAudioSource* audioSource,
+    juce::ARAAudioModification* audioModification)
+{
+    debugLog ("ara didAddAudioModificationToAudioSource src=" + ptrHex (audioSource)
+              + " srcPid=" + pidOf (audioSource)
+              + " " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
+}
+
+void DeepSvcDocumentController::willRemoveAudioModificationFromAudioSource (
+    juce::ARAAudioSource* audioSource,
+    juce::ARAAudioModification* audioModification)
+{
+    debugLog ("ara willRemoveAudioModificationFromAudioSource src=" + ptrHex (audioSource)
+              + " srcPid=" + pidOf (audioSource)
+              + " " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
+}
+
+void DeepSvcDocumentController::willUpdateAudioModificationProperties (
+    juce::ARAAudioModification* audioModification,
+    juce::ARAAudioModification::PropertiesPtr newProperties)
+{
+    juce::String newPid = "-";
+    if (newProperties != nullptr && newProperties->persistentID != nullptr
+        && newProperties->persistentID[0] != 0)
+        newPid = juce::String (newProperties->persistentID);
+    debugLog ("ara willUpdateAudioModificationProperties " + describeMod (audioModification)
+              + " newPid=" + newPid);
+}
+
+void DeepSvcDocumentController::willDeactivateAudioModificationForUndoHistory (
+    juce::ARAAudioModification* audioModification,
+    bool deactivate)
+{
+    debugLog ("ara willDeactivateAudioModificationForUndoHistory deactivate="
+              + juce::String (deactivate ? 1 : 0) + " " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
+}
+
+void DeepSvcDocumentController::didDeactivateAudioModificationForUndoHistory (
+    juce::ARAAudioModification* audioModification,
+    bool deactivate)
+{
+    debugLog ("ara didDeactivateAudioModificationForUndoHistory deactivate="
+              + juce::String (deactivate ? 1 : 0) + " " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
 }
 
 void DeepSvcDocumentController::didUpdateAudioModificationProperties (juce::ARAAudioModification* audioModification)
 {
+    debugLog ("ara didUpdateAudioModificationProperties " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
     auto& modification = ensureAudioModification (audioModification);
     modification.updateIdentity (audioModification);
     attachSource (modification);
@@ -609,6 +826,8 @@ void DeepSvcDocumentController::didUpdateAudioModificationProperties (juce::ARAA
 
 void DeepSvcDocumentController::willDestroyAudioModification (juce::ARAAudioModification* audioModification)
 {
+    debugLog ("ara willDestroyAudioModification " + describeMod (audioModification)
+              + " " + shadowSummary (findAudioModification (audioModification)));
     auto* modification = findAudioModification (audioModification);
     if (modification == nullptr)
         return;
@@ -637,6 +856,8 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
     juce::ARAAudioModification* audioModification,
     juce::ARAPlaybackRegion* playbackRegion)
 {
+    debugLog ("ara didAddPlaybackRegionToAudioModification " + describeMod (audioModification)
+              + " " + describeRegion (playbackRegion));
     auto& modification = ensureAudioModification (audioModification);
     auto& region = ensurePlaybackRegion (playbackRegion);
     region.updateFrom (playbackRegion);
@@ -653,6 +874,8 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
 void DeepSvcDocumentController::didEndEditing (juce::ARADocument* document)
 {
     juce::ignoreUnused (document);
+    debugLog ("ara didEndEditing");
+    dumpAraGraph ("didEndEditing");
 
     for (auto& modification : audioModifications)
     {
@@ -689,6 +912,8 @@ void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudi
 
 void DeepSvcDocumentController::didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence)
 {
+    debugLog ("ara didUpdateRegionSequenceProperties seq=" + ptrHex (regionSequence)
+              + " seqName=" + seqNameOf (regionSequence));
     // 音轨颜色变化后刷新音频块的显示颜色
     for (auto& region : playbackRegions)
     {
@@ -701,8 +926,43 @@ void DeepSvcDocumentController::didUpdateRegionSequenceProperties (juce::ARARegi
     refreshRegisteredRenderers (publishModelChange());
 }
 
+void DeepSvcDocumentController::didAddPlaybackRegionToRegionSequence (
+    juce::ARARegionSequence* regionSequence,
+    juce::ARAPlaybackRegion* playbackRegion)
+{
+    debugLog ("ara didAddPlaybackRegionToRegionSequence seq=" + ptrHex (regionSequence)
+              + " seqName=" + seqNameOf (regionSequence)
+              + " " + describeRegion (playbackRegion));
+}
+
+void DeepSvcDocumentController::willRemovePlaybackRegionFromRegionSequence (
+    juce::ARARegionSequence* regionSequence,
+    juce::ARAPlaybackRegion* playbackRegion)
+{
+    debugLog ("ara willRemovePlaybackRegionFromRegionSequence seq=" + ptrHex (regionSequence)
+              + " seqName=" + seqNameOf (regionSequence)
+              + " " + describeRegion (playbackRegion));
+}
+
+void DeepSvcDocumentController::willUpdatePlaybackRegionProperties (
+    juce::ARAPlaybackRegion* playbackRegion,
+    juce::ARAPlaybackRegion::PropertiesPtr newProperties)
+{
+    juce::String next = "new=null";
+    if (newProperties != nullptr)
+        next = "newWin=" + juce::String (newProperties->startInModificationTime, 6)
+             + "+" + juce::String (newProperties->durationInModificationTime, 6)
+             + " newPlace=" + juce::String (newProperties->startInPlaybackTime, 6)
+             + "+" + juce::String (newProperties->durationInPlaybackTime, 6)
+             + " newSeqRef=" + ptrHex (newProperties->regionSequenceRef)
+             + " flags=" + juce::String (static_cast<juce::int64> (newProperties->transformationFlags));
+    debugLog ("ara willUpdatePlaybackRegionProperties " + describeRegion (playbackRegion)
+              + " " + next);
+}
+
 void DeepSvcDocumentController::didUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion)
 {
+    debugLog ("ara didUpdatePlaybackRegionProperties " + describeRegion (playbackRegion));
     auto& region = ensurePlaybackRegion (playbackRegion);
     region.updateFrom (playbackRegion);
     if (auto* modification = findAudioModification (region.audioModificationPersistentId))
@@ -711,9 +971,11 @@ void DeepSvcDocumentController::didUpdatePlaybackRegionProperties (juce::ARAPlay
 }
 
 void DeepSvcDocumentController::willRemovePlaybackRegionFromAudioModification (
-    juce::ARAAudioModification*,
+    juce::ARAAudioModification* audioModification,
     juce::ARAPlaybackRegion* playbackRegion)
 {
+    debugLog ("ara willRemovePlaybackRegionFromAudioModification " + describeMod (audioModification)
+              + " " + describeRegion (playbackRegion));
     removePlaybackRegion (playbackRegion);
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers (publishModelChange());
@@ -721,6 +983,7 @@ void DeepSvcDocumentController::willRemovePlaybackRegionFromAudioModification (
 
 void DeepSvcDocumentController::willDestroyPlaybackRegion (juce::ARAPlaybackRegion* playbackRegion)
 {
+    debugLog ("ara willDestroyPlaybackRegion " + describeRegion (playbackRegion));
     removePlaybackRegion (playbackRegion);
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers (publishModelChange());
@@ -791,6 +1054,12 @@ bool DeepSvcDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& o
     if (bindings.size() > static_cast<size_t> (kMaxArchiveRecords))
         return false;
 
+    juce::String stored;
+    for (const auto* modification : bindings)
+        stored += modification->persistentId + ",";
+    debugLog ("ara doStoreObjects count=" + juce::String (static_cast<int> (bindings.size()))
+              + " pids=[" + stored + "]");
+
     bool ok = output.writeInt (kArchiveMagic);
     ok = output.writeInt (kArchiveVersion) && ok;
     ok = output.writeInt (static_cast<int> (bindings.size())) && ok;
@@ -830,14 +1099,23 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
         const auto archivedPersistentId = input.readString();
         const auto jsonText = input.readString();
 
+        debugLog ("ara doRestore record archivedPid=" + archivedPersistentId
+                  + " jsonBytes=" + juce::String (jsonText.length()));
+
         // 单条记录映射不上或损坏时跳过该条，对应 OpenTune restoreAudioModificationContent 的逐条容错
         const auto restoredPersistentId = mapRestoredPersistentId (archivedPersistentId, filter);
         if (restoredPersistentId.isEmpty())
+        {
+            debugLog ("ara doRestore skip noHostMap archivedPid=" + archivedPersistentId);
             continue;
+        }
 
         auto* modification = findAudioModification (restoredPersistentId);
         if (modification == nullptr || modification->audioModification == nullptr)
+        {
+            debugLog ("ara doRestore skip noShadow restoredPid=" + restoredPersistentId);
             continue;
+        }
 
         attachSource (*modification);
         if (! modification->hasContentState())
@@ -856,11 +1134,19 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
         if (archivedStart < 0.0
             || std::abs (archivedStart - content.sourceWindow.sourceStartSeconds) > 1.0e-3
             || std::abs (archivedEnd - content.sourceWindow.sourceEndSeconds) > 1.0e-3)
+        {
+            debugLog ("ara doRestore skip windowMismatch restoredPid=" + restoredPersistentId
+                      + " archived=" + juce::String (archivedStart, 6) + ".." + juce::String (archivedEnd, 6)
+                      + " current=" + juce::String (content.sourceWindow.sourceStartSeconds, 6)
+                      + ".." + juce::String (content.sourceWindow.sourceEndSeconds, 6));
             continue;
+        }
 
         content.segments = archive::segmentsFromJson (json.getProperty ("segments", juce::var()));
 
         ++content.contentRevision;
+        debugLog ("ara doRestore applied restoredPid=" + restoredPersistentId
+                  + " segs=" + juce::String (static_cast<int> (content.segments.size())));
         // 恢复的内容对宿主是新增的：标记工程已修改，宿主才会保存
         notifyPersistedStateChanged (*modification);
     }
@@ -1011,6 +1297,16 @@ AudioModificationState& DeepSvcDocumentController::ensureAudioModification (juce
     if (auto* state = findAudioModification (audioModification))
         return *state;
 
+    const juce::String pid (audioModification != nullptr ? juce::String (audioModification->getPersistentID())
+                                                         : juce::String());
+    if (pid.isNotEmpty())
+        if (auto* byPid = findAudioModification (pid))
+            debugLog ("ara shadowPidHitPointerMiss pid=" + pid
+                      + " oldPtr=" + ptrHex (byPid->audioModification)
+                      + " newPtr=" + ptrHex (audioModification)
+                      + " " + shadowSummary (byPid));
+
+    debugLog ("ara shadowCreateEmpty " + describeMod (audioModification));
     audioModifications.emplace_back();
     auto& state = audioModifications.back();
     state.updateIdentity (audioModification);
@@ -1178,6 +1474,34 @@ void DeepSvcDocumentController::notifyPersistedStateChanged (AudioModificationSt
 
 //==============================================================================
 // 工厂
+
+juce::ARAAudioModification* DeepSvcDocumentController::doCreateAudioModification (
+    juce::ARAAudioSource* audioSource,
+    ARA::ARAAudioModificationHostRef hostRef,
+    const juce::ARAAudioModification* optionalModificationToClone)
+{
+    auto* created = new juce::ARAAudioModification (audioSource, hostRef, optionalModificationToClone);
+    debugLog ("ara doCreateAudioModification created=" + ptrHex (created)
+              + " clone=" + ptrHex (optionalModificationToClone)
+              + " clonePid=" + pidOf (optionalModificationToClone)
+              + " " + describeMod (optionalModificationToClone)
+              + " src=" + ptrHex (audioSource)
+              + " srcPid=" + pidOf (audioSource)
+              + " srcModCount=" + juce::String (audioSource != nullptr
+                    ? static_cast<int> (audioSource->getAudioModifications().size())
+                    : -1));
+    return created;
+}
+
+juce::ARAPlaybackRegion* DeepSvcDocumentController::doCreatePlaybackRegion (
+    juce::ARAAudioModification* modification,
+    ARA::ARAPlaybackRegionHostRef hostRef)
+{
+    auto* created = new juce::ARAPlaybackRegion (modification, hostRef);
+    debugLog ("ara doCreatePlaybackRegion created=" + ptrHex (created)
+              + " " + describeMod (modification));
+    return created;
+}
 
 juce::ARAPlaybackRenderer* DeepSvcDocumentController::doCreatePlaybackRenderer()
 {

@@ -135,20 +135,37 @@ public:
     JobStatus jobStatusFor (SegmentKey key, int slot) const;
 
     // ---- ARA 通知 ----
+    void willBeginEditing (juce::ARADocument* document) override;
+    void didEndEditing (juce::ARADocument* document) override;
     void didUpdateAudioSourceProperties (juce::ARAAudioSource* audioSource) override;
     void doUpdateAudioSourceContent (juce::ARAAudioSource* audioSource,
                                      const juce::ARAContentUpdateScopes scopeFlags) override;
     void willDestroyAudioSource (juce::ARAAudioSource* audioSource) override;
+    void didAddAudioModificationToAudioSource (juce::ARAAudioSource* audioSource,
+                                               juce::ARAAudioModification* audioModification) override;
+    void willRemoveAudioModificationFromAudioSource (juce::ARAAudioSource* audioSource,
+                                                     juce::ARAAudioModification* audioModification) override;
+    void willUpdateAudioModificationProperties (juce::ARAAudioModification* audioModification,
+                                                juce::ARAAudioModification::PropertiesPtr newProperties) override;
     void didUpdateAudioModificationProperties (juce::ARAAudioModification* audioModification) override;
+    void willDeactivateAudioModificationForUndoHistory (juce::ARAAudioModification* audioModification,
+                                                        bool deactivate) override;
+    void didDeactivateAudioModificationForUndoHistory (juce::ARAAudioModification* audioModification,
+                                                       bool deactivate) override;
     void willDestroyAudioModification (juce::ARAAudioModification* audioModification) override;
     void didAddPlaybackRegionToAudioModification (juce::ARAAudioModification* audioModification,
                                                   juce::ARAPlaybackRegion* playbackRegion) override;
-    void didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource, bool enable) override;
-    void didEndEditing (juce::ARADocument* document) override;
-    void didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence) override;
-    void didUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion) override;
     void willRemovePlaybackRegionFromAudioModification (juce::ARAAudioModification* audioModification,
                                                         juce::ARAPlaybackRegion* playbackRegion) override;
+    void didEnableAudioSourceSamplesAccess (juce::ARAAudioSource* audioSource, bool enable) override;
+    void didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence) override;
+    void didAddPlaybackRegionToRegionSequence (juce::ARARegionSequence* regionSequence,
+                                               juce::ARAPlaybackRegion* playbackRegion) override;
+    void willRemovePlaybackRegionFromRegionSequence (juce::ARARegionSequence* regionSequence,
+                                                     juce::ARAPlaybackRegion* playbackRegion) override;
+    void willUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion,
+                                             juce::ARAPlaybackRegion::PropertiesPtr newProperties) override;
+    void didUpdatePlaybackRegionProperties (juce::ARAPlaybackRegion* playbackRegion) override;
     void willDestroyPlaybackRegion (juce::ARAPlaybackRegion* playbackRegion) override;
 
 protected:
@@ -157,6 +174,13 @@ protected:
     bool doStoreObjectsToStream (juce::ARAOutputStream& output,
                                  const juce::ARAStoreObjectsFilter* filter) override;
 
+    juce::ARAAudioModification* doCreateAudioModification (
+        juce::ARAAudioSource* audioSource,
+        ARA::ARAAudioModificationHostRef hostRef,
+        const juce::ARAAudioModification* optionalModificationToClone) override;
+    juce::ARAPlaybackRegion* doCreatePlaybackRegion (
+        juce::ARAAudioModification* modification,
+        ARA::ARAPlaybackRegionHostRef hostRef) override;
     juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() override;
     juce::ARAEditorView* doCreateEditorView() override;
 
@@ -205,6 +229,9 @@ private:
     // 新分段的状态从旧布局中重叠最大的分段深拷贝继承（docs/ara.md 第 4.1 节）
     void reconcileSegments (AudioModificationState& modification);
     void reconcileAllSegments();
+
+    // 把宿主对象图与插件影子表打进 debug.log，用于核对切分/换轨时事件实例是否保留
+    void dumpAraGraph (const juce::String& reason);
 
     // 对应 OpenTune 的 notifyContentChanged 调用点（OpenTuneDocumentController.cpp 第 1877 行等）：
     // 入库状态变化后通知宿主工程已修改，宿主才会保存

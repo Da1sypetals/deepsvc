@@ -7,13 +7,20 @@
 以走带上的一个音频事件为中心。音频事件是用户在时间线上拖动、切分、修剪的对象，
 用户的每一个操作都作用在它身上。音频事件对应宿主 ARA 对象图中的 AudioModification，
 插件以子类 EventAudioModification 承载它，音高数据与合成音频全部作为该子类的成员存在。
-窗口与放置属于宿主的 PlaybackRegion，插件在需要时实时读取，不保存任何副本。
+窗口、放置、所属音轨属于宿主的 PlaybackRegion，插件在需要时实时读取，不保存任何副本。
+
+事件身份是 AudioModification 的实例及其 persistentID。Studio One 在切分、平移、挪动音轨、
+重新打开工程时都保留同一个 AudioModification（重新打开时指针更新，persistentID 不变）。
+PlaybackRegion 在平移时保留同一实例；在切分时原实例保留并缩短窗口，同时新建另一个实例；
+在挪动音轨时原实例被销毁，再在同一 AudioModification 下新建实例并加入另一条 RegionSequence。
+音高数据与合成音频因此只存在 EventAudioModification 上。
 
 ## 2. 术语表
 
 - 音频事件（EventAudioModification）：走带上一段参与分析与合成的音频内容，宿主 AudioModification 的插件子类实例，持有音高数据与合成音频。
 - 音频文件（AudioSource）：宿主持有的音频文件对象，音频事件的归属者，一个音频文件下面可以有任意多个音频事件。
-- 回放区域（PlaybackRegion）：宿主对象，描述音频事件的一个窗口与一次放置，一个音频事件下面可以有任意多个回放区域。
+- 回放区域（PlaybackRegion）：宿主对象，描述音频事件的一个窗口与一次放置，以及所属 RegionSequence。一个音频事件下面可以有任意多个回放区域。
+- 音轨序列（RegionSequence）：宿主对象，对应走带上的一条音轨。回放区域通过 getRegionSequence() 给出所属音轨，插件不保存副本。
 - 窗口：回放区域引用的音频文件内区段，由 startInAudioModificationTime 与 durationInAudioModificationTime 给出，文件坐标，宿主实时给出。
 - 放置：回放区域在走带上的位置与时长，由 startInPlaybackTime 与 durationInPlaybackTime 给出，走带坐标，宿主实时给出。
 - 文件坐标：以音频文件起点为原点的时间坐标，单位秒，音高数据与合成音频的全部时间字段使用文件坐标。
@@ -21,13 +28,14 @@
 - 音高数据（PitchData）：一次分析得到的音高序列，空 optional 表示未分析。
 - 合成音频（SynthAudio）：一次合成得到的样本序列及其覆盖区间，空 optional 表示未合成。
 - 覆盖区间：合成音频在文件坐标里有效的范围，左闭右开，由 synthStartTime 与 synthEndTime 给出。
+- 尚未合成区间：某个回放区域窗口里、落在覆盖区间之外的文件坐标区段。回放输出无声，界面把该区段标为尚未合成。
 - 任务（taskId）：JobManager 中一次分析或合成请求的编号，类型 uint64_t，结果写回发起请求的音频事件。
 - dataRevision：音频事件的音高数据或合成音频被整体替换的次数，初始为 0，每替换一次加一。
 
 ## 3. 对象树
 
 归属方向自上而下：音频文件持有音频事件，音频事件持有音高数据、合成音频与回放区域。
-以音频事件为叙述根。
+回放区域同时属于一条 RegionSequence。以音频事件为叙述根。
 
 ```mermaid
 graph TD
@@ -36,6 +44,7 @@ graph TD
     Event --> Synth["合成音频 SynthAudio<br/>例：88200 样本"]
     Event --> Revision["dataRevision<br/>uint64_t<br/>例：1"]
     Event --> Region["回放区域 PlaybackRegion<br/>例：窗口 3.0 起长 2.0，放置 0.0 起长 2.0"]
+    Seq["音轨序列 RegionSequence<br/>例：male 2"] --> Region
     Pitch --> FT["f0Times<br/>std::vector&lt;float&gt;<br/>例：200 个时刻"]
     Pitch --> FV["f0Values<br/>std::vector&lt;float&gt;<br/>例：200 个频率"]
     Synth --> SM["samples<br/>std::shared_ptr&lt;const std::vector&lt;float&gt;&gt;<br/>例：88200 个样本"]
@@ -63,9 +72,16 @@ dataRevision 为 0 表示自创建以来没有任何数据写入。
 - 归属：构造时由宿主经 doCreateAudioModification（ARAPlug.h:948）传入所属 AudioSource。
 同一音频文件下的多个音频事件彼此独立，各自持有一份音高数据与合成音频，
 支持各自使用不同的音色与参数合成。
+- persistentID：宿主分配，AudioModification::getPersistentID()（ARAPlug.h:536）。
+同一会话内指针与 persistentID 一同标识该事件；重新打开工程后指针更新，persistentID 不变，
+归档按它把 pitchData 与 synthAudio 写回对应事件。
 - pitchData：std::optional&lt;PitchData&gt;。空表示未分析。
 - synthAudio：std::optional&lt;SynthAudio&gt;。空表示未合成。
 - dataRevision：uint64_t，初始 0。音高数据或合成音频被整体替换时加一。
+- 构造：optionalModificationToClone 为空时成员为空、dataRevision 为 0。
+optionalModificationToClone 非空时，从被克隆事件复制 pitchData、synthAudio、dataRevision，
+两份此后独立。Studio One 的切分、平移、挪动音轨走同一实例路径，clone 为空；
+拷贝事件等操作仍可能传入非空 clone，构造函数必须复制成员。
 
 PitchData：
 
@@ -79,16 +95,19 @@ SynthAudio：
 下标 0 对应文件坐标 synthStartTime，第 i 个样本对应文件坐标 synthStartTime 加 i 除 44100。
 - synthStartTime：double，单位秒，文件坐标，覆盖区间起点，含。
 - synthEndTime：double，单位秒，文件坐标，覆盖区间终点，不含。
+- 回放：走带位置映射回文件坐标后，落在覆盖区间内的时间读取 samples；落在覆盖区间外的时间输出无声。
 
-PlaybackRegion（四个字段全部属于宿主，插件实时读取，不保存副本）：
+PlaybackRegion（字段全部属于宿主，插件实时读取，不保存副本；不以该对象指针作为数据键）：
 
 - startInAudioModificationTime：double，单位秒，文件坐标，窗口起点。
 - durationInAudioModificationTime：double，单位秒，窗口长度。
 - startInPlaybackTime：double，单位秒，走带坐标，放置起点。
 - durationInPlaybackTime：double，单位秒，放置时长。
+- RegionSequence：所属音轨，getRegionSequence()。
 - 读取接口：getStartInAudioModificationTime() 与 getDurationInAudioModificationTime()
 （ARAPlug.h:606-607），getStartInPlaybackTime() 与 getDurationInPlaybackTime()（ARAPlug.h:616-617）。
 - 分析与合成的范围取该事件全部回放区域窗口的并集，发起请求时实时读取。
+- 界面：窗口与覆盖区间求交的部分按已合成绘制；窗口内落在覆盖区间外的部分标为尚未合成。
 
 任务：
 
@@ -100,9 +119,37 @@ PlaybackRegion（四个字段全部属于宿主，插件实时读取，不保存
 （ARAPlug.h:536），内容为 JSON，含 pitchData 与 synthAudio 两部分；音频文件来源按
 AudioSource 的 persistentID 记录。读回时按同样的键从宿主对象图查找事件并恢复。
 
-## 5. 取值走查
+## 5. 宿主操作与对象身份
 
-场景：音频文件 10 秒，一段事件经历合成、缩短、拉长、切分、挪动音轨。
+以下为 Studio One 实测回调。插件按这些路径处理对象，不另外保存窗口或放置。
+
+平移：宿主对同一 PlaybackRegion 调用属性更新，只改 startInPlaybackTime。
+窗口、RegionSequence、AudioModification 指针与 persistentID 均不变。
+pitchData 与 synthAudio 仍在该事件上，插件无写入。
+
+切分：宿主调用 doCreatePlaybackRegion，父对象为原 AudioModification。
+随后对原 PlaybackRegion 缩短 durationInAudioModificationTime 与 durationInPlaybackTime，
+窗口起点与放置起点不变。新旧两个回放区域共享同一 EventAudioModification，
+共享同一份 pitchData 与 synthAudio，切分不裁剪这两份数据。
+宿主走 clone 路径时，doCreateAudioModification 的 optionalModificationToClone 非空，
+新事件复制成员后两份独立。
+
+挪动音轨：宿主销毁原 PlaybackRegion，再 doCreatePlaybackRegion 挂到同一 AudioModification，
+加入另一条 RegionSequence。窗口的起点与长度不变。startInPlaybackTime 可能改变。
+AudioModification 指针与 persistentID 不变。插件在 willDestroyPlaybackRegion 之后
+不得再使用旧区域指针。
+
+打开工程：宿主为每个已归档事件调用 doCreateAudioModification，clone 为空，
+再为该事件下每个窗口创建 PlaybackRegion 并加入对应 RegionSequence。
+persistentID 与上次会话相同，指针是新的。切分后的多个窗口仍挂在同一个事件上。
+
+删除回放区域：宿主销毁该 PlaybackRegion。同一事件上仍有其他回放区域时，
+AudioModification 继续存在。全部回放区域删除后，宿主调用
+willDeactivateAudioModificationForUndoHistory；文档关闭时 willDestroyAudioModification。
+
+## 6. 取值走查
+
+场景：音频文件 10 秒，一段事件经历合成、缩短、拉长、切分、平移、挪动音轨。
 
 | 步骤 | 操作 | 关键字段变化 |
 | --- | --- | --- |
@@ -110,10 +157,16 @@ AudioSource 的 persistentID 记录。读回时按同样的键从宿主对象图
 | 2 | 用户在走带上选中 3.0 至 5.0 秒生成事件 | 宿主调用 doCreateAudioModification，optionalModificationToClone 为空；pitchData 无，synthAudio 无，dataRevision 0；回放区域窗口 3.0 起长 2.0，放置 0.0 起长 2.0 |
 | 3 | 用户点击合成 | 插件读取全部回放区域窗口并集 3.0 至 5.0，提交 taskId 1；完成后写回 synthAudio：samples 88200 个样本（2.0 乘 44100），synthStartTime 3.0，synthEndTime 5.0；dataRevision 1 |
 | 4 | 用户把事件缩短到 3.0 至 4.0 秒 | 宿主把窗口改为起点 3.0 长 1.0；synthAudio 与 pitchData 原样，覆盖区间仍为 3.0 至 5.0 |
-| 5 | 用户把事件拉长到 3.0 至 6.0 秒 | 窗口改为起点 3.0 长 3.0；回放把走带位置映射回文件坐标，3.0 至 5.0 落在覆盖区间内播合成音频，5.0 至 6.0 落在覆盖区间外播宿主原声；第 4 至 5 秒的合成音频在步骤 4 中没有任何数据被删除，拉长后原样播出 |
-| 6 | 用户把事件切分为 A1（3.0 至 4.0）与 A2（4.0 至 5.0） | 宿主销毁旧回放区域，新建两个。宿主保留同一个 AudioModification 时，两个区域共享同一份 pitchData 与 synthAudio；宿主调用 cloneAudioModification 时，新事件构造函数从 optionalModificationToClone 复制 pitchData、synthAudio、dataRevision，两份独立，此后 A1 重新合成，A2 不受影响 |
-| 7 | 用户把 A1 挪动到另一条音轨 | 宿主更新 startInPlaybackTime；窗口、pitchData、synthAudio 全部不变，回放按新的放置换算文件坐标 |
+| 5 | 用户把事件拉长到 3.0 至 6.0 秒 | 窗口改为起点 3.0 长 3.0；覆盖区间仍为 3.0 至 5.0。回放把走带位置映射回文件坐标，3.0 至 5.0 播合成音频，5.0 至 6.0 输出无声，界面把 5.0 至 6.0 标为尚未合成。第 4 至 5 秒的合成音频在步骤 4 中没有任何数据被删除，拉长后原样播出 |
+| 6 | 用户把事件切分为 A1（3.0 至 4.0）与 A2（4.0 至 5.0） | 宿主在同一 AudioModification 上新建第二个 PlaybackRegion（A2，窗口 4.0 起长 1.0）；再把原 PlaybackRegion（A1）窗口缩短为 3.0 起长 1.0。两区域共享同一份 pitchData 与 synthAudio，覆盖区间仍为 3.0 至 5.0。宿主走 clone 路径时，新事件从 optionalModificationToClone 复制成员，两份独立，此后 A1 重新合成，A2 不受影响 |
+| 7 | 用户把 A1 沿走带平移 | 同一 PlaybackRegion 指针，同一 AudioModification，同一 RegionSequence；窗口不变；startInPlaybackTime 改为新位置。pitchData 与 synthAudio 不变 |
+| 8 | 用户把 A1 挪到另一条音轨 | 宿主销毁 A1 的 PlaybackRegion，再在同一 AudioModification 上新建 PlaybackRegion，加入新的 RegionSequence；窗口仍为 3.0 起长 1.0；startInPlaybackTime 可能改变。pitchData 与 synthAudio 仍在原事件上 |
 
-## 6. 禁止事项
+## 7. 禁止事项
 
 不使用 ASCII 画图。
+音高数据与合成音频只作为 EventAudioModification 的成员存在。
+不以 PlaybackRegion 指针作为数据键。
+不保存窗口、放置、RegionSequence 的副本。
+切分、缩短、平移、挪动音轨均不裁剪 pitchData 与 synthAudio。
+窗口超出覆盖区间时，超出部分输出无声，界面标为尚未合成。
