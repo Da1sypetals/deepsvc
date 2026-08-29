@@ -96,6 +96,8 @@ target_sources(deepsvc PRIVATE
 
     Source/State/Parameters.cpp
     Source/State/Parameters.h
+    Source/State/WorkingParamsStore.cpp
+    Source/State/WorkingParamsStore.h
 
     Source/Timbre/TimbreLibrary.cpp
     Source/Timbre/TimbreLibrary.h

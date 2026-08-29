@@ -4,6 +4,7 @@
 #include "ARA/DeepSvcPlaybackRenderer.h"
 #include "DebugLog.h"
 #include "Plugin/PluginEditor.h"
+#include "State/WorkingParamsStore.h"
 
 // 对应 OpenTune Source/PluginProcessor.cpp 的 ARA 路径
 namespace deepsvc
@@ -16,10 +17,13 @@ DeepSvcAudioProcessor::DeepSvcAudioProcessor()
     , apvts (*this, nullptr, "PARAMETERS", parameters::createParameterLayout())
 {
     debugLog ("processor created p=" + juce::String::toHexString (reinterpret_cast<int64_t> (this)));
+    mirrorWorkingParamsFromStore();
+    WorkingParamsStore::getInstance().addChangeListener (this);
 }
 
 DeepSvcAudioProcessor::~DeepSvcAudioProcessor()
 {
+    WorkingParamsStore::getInstance().removeChangeListener (this);
     debugLog ("processor destroyed p=" + juce::String::toHexString (reinterpret_cast<int64_t> (this)));
 }
 
@@ -92,6 +96,7 @@ void DeepSvcAudioProcessor::didBindToARA() noexcept
 
 juce::AudioProcessorEditor* DeepSvcAudioProcessor::createEditor()
 {
+    mirrorWorkingParamsFromStore();
     return new DeepSvcEditor (*this);
 }
 
@@ -107,15 +112,28 @@ DeepSvcDocumentController* DeepSvcAudioProcessor::getDeepSvcDocumentController()
 
 void DeepSvcAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
-        copyXmlToBinary (*xml, destData);
+    juce::ignoreUnused (destData);
 }
 
 void DeepSvcAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    juce::ignoreUnused (data, sizeInBytes);
+    mirrorWorkingParamsFromStore();
+    if (auto* editor = dynamic_cast<DeepSvcEditor*> (getActiveEditor()))
+        editor->applyProcessorWorkingTimbre();
+}
+
+void DeepSvcAudioProcessor::mirrorWorkingParamsFromStore()
+{
+    const juce::ScopedValueSetter<bool> scope (mirroringWorkingParams, true);
+    parameters::pushSynthParamsToApvts (apvts, WorkingParamsStore::getInstance().params());
+}
+
+void DeepSvcAudioProcessor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    mirrorWorkingParamsFromStore();
+    if (auto* editor = dynamic_cast<DeepSvcEditor*> (getActiveEditor()))
+        editor->applyProcessorWorkingTimbre();
 }
 
 void DeepSvcAudioProcessor::rememberPianoRollViewport (PianoRollPlacementIdentity placement,

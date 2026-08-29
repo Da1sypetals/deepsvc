@@ -55,7 +55,7 @@
   }
   .body {
     display: grid;
-    grid-template-columns: 168px 1fr 248px;
+    grid-template-columns: 168px 248px 1fr;
     gap: 8px;
     min-height: 560px;
   }
@@ -253,7 +253,7 @@
     border-color: var(--pink600);
     color: #fff;
   }
-  .right {
+  .params-col {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -279,6 +279,39 @@
   }
   .field .k { color: var(--ink600); }
   .field .v { color: var(--ink900); text-align: right; }
+  .step-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px 8px;
+  }
+  .step-row .ghost {
+    min-width: 36px;
+    padding: 0 6px;
+    height: 24px;
+    font-size: 12px;
+  }
+  .step-row .slider {
+    flex: 1;
+    margin: 0;
+  }
+  .step-row .v {
+    min-width: 40px;
+    text-align: right;
+    font-size: 12px;
+  }
+  .step-row .step-value {
+    min-width: 48px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--pink050);
+    border: 1px solid var(--pink200);
+    border-radius: var(--control-radius);
+    text-align: center;
+    font-size: 12px;
+  }
   .slider {
     height: 6px;
     border-radius: 99px;
@@ -403,7 +436,7 @@
 <body>
 <div class="page">
   <h1>编辑器界面</h1>
-  <p class="lead">在钢琴卷时间轴上按下左键或拖动，会改写宿主播放头。右边栏顶部的槽位条始终可点：A/B 切换当前副本，旁通与清空作用在这个副本上。下面默认是合成参数；按住钢琴卷右下角、坐标格右边的圆圈 i，换成只读的当前内容，松开后合成参数回来。过程格空闲时写「空闲」；任何任务结束后那个状态再停三秒，然后回到空闲。</p>
+  <p class="lead">在钢琴卷时间轴上按下左键或拖动，会改写宿主播放头。音色库与钢琴卷之间是合成参数，顶部槽位条始终可点：A/B 切换当前副本，旁通与清空作用在这个副本上。下面默认是合成参数；按住钢琴卷右下角、坐标格右边的圆圈 i，换成只读的当前内容，松开后合成参数回来。过程格空闲时写「空闲」；任何任务结束后那个状态再停三秒，然后回到空闲。</p>
 
   <div class="window">
     <div class="body">
@@ -415,6 +448,72 @@
           <div class="row-item">choir.wav</div>
         </div>
         <p class="caption">下一次合成要用的参考音频在这里选。</p>
+      </aside>
+
+      <aside class="params-col">
+        <div class="panel slot-bar">
+          <span class="mark">4</span>
+          <div class="ab">
+            <button class="on" id="slot-a" type="button">A</button>
+            <button id="slot-b" type="button">B</button>
+          </div>
+          <span class="grow"></span>
+          <button class="ghost" id="bypass" type="button">旁通</button>
+          <button class="ghost" id="clear" type="button">清空</button>
+        </div>
+
+        <div class="panel body-panel params" id="params">
+          <div class="panel-title"><span><span class="mark">5</span>合成参数</span></div>
+          <p class="caption">将要送去下一次合成的编辑值。</p>
+          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
+          <div class="field" style="display:block;padding-bottom:4px;">
+            <div style="padding:0 12px;"><span class="k">扩散步数</span></div>
+            <div class="step-row">
+              <button class="ghost" type="button">-</button>
+              <span class="step-value">16</span>
+              <button class="ghost" type="button">+</button>
+            </div>
+          </div>
+          <div class="field" style="display:block;padding-bottom:4px;">
+            <div style="padding:0 12px;"><span class="k">音高偏移</span></div>
+            <div class="step-row">
+              <button class="ghost" type="button">-12</button>
+              <div class="slider"><i></i></div>
+              <span class="v">+12.0</span>
+              <button class="ghost" type="button">+12</button>
+            </div>
+          </div>
+          <div class="field" style="display:block;padding-bottom:4px;">
+            <div style="padding:0 12px;"><span class="k">音高微调</span></div>
+            <div class="step-row">
+              <button class="ghost" type="button">-5</button>
+              <div class="slider"><i style="width:50%"></i></div>
+              <span class="v">0</span>
+              <button class="ghost" type="button">+5</button>
+            </div>
+          </div>
+          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
+          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
+          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
+        </div>
+
+        <div class="panel body-panel copy hidden" id="copy">
+          <div class="panel-title"><span><span class="mark">6</span>当前内容</span></div>
+          <p class="caption">这个副本里已经写好的合成结果，以及当时用过的全部参数。只读。</p>
+          <div class="warn">编辑中的参数尚未写入这个副本</div>
+          <div class="field"><span class="k">回放</span><span class="v">合成音频</span></div>
+          <div class="field"><span class="k">音高</span><span class="v">已检测</span></div>
+          <div class="field"><span class="k">音色</span><span class="v">ref-male.wav</span></div>
+          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
+          <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
+          <div class="field"><span class="k">音高偏移</span><span class="v">+12.0 半音</span></div>
+          <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
+          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
+          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
+          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
+          <div class="field"><span class="k">覆盖区间</span><span class="v">3.00 – 5.00 秒</span></div>
+          <div class="field"><span class="k">合成耗时</span><span class="v">12.3 秒</span></div>
+        </div>
       </aside>
 
       <section class="piano-wrap">
@@ -457,52 +556,6 @@
           <span><span class="mark">2</span>钢琴卷</span>
         </div>
       </section>
-
-      <aside class="right">
-        <div class="panel slot-bar">
-          <span class="mark">4</span>
-          <div class="ab">
-            <button class="on" id="slot-a" type="button">A</button>
-            <button id="slot-b" type="button">B</button>
-          </div>
-          <span class="grow"></span>
-          <button class="ghost" id="bypass" type="button">旁通</button>
-          <button class="ghost" id="clear" type="button">清空</button>
-        </div>
-
-        <div class="panel body-panel params" id="params">
-          <div class="panel-title"><span><span class="mark">5</span>合成参数</span></div>
-          <p class="caption">将要送去下一次合成的编辑值。</p>
-          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
-          <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
-          <div class="field" style="display:block;padding-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;padding:0 12px;"><span class="k">音高偏移</span><span class="v">+12.0</span></div>
-            <div class="slider" style="margin:6px 12px 0;"><i></i></div>
-          </div>
-          <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
-          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
-          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
-          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
-        </div>
-
-        <div class="panel body-panel copy hidden" id="copy">
-          <div class="panel-title"><span><span class="mark">6</span>当前内容</span></div>
-          <p class="caption">这个副本里已经写好的合成结果，以及当时用过的全部参数。只读。</p>
-          <div class="warn">编辑中的参数尚未写入这个副本</div>
-          <div class="field"><span class="k">回放</span><span class="v">合成音频</span></div>
-          <div class="field"><span class="k">音高</span><span class="v">已检测</span></div>
-          <div class="field"><span class="k">音色</span><span class="v">ref-male.wav</span></div>
-          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
-          <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
-          <div class="field"><span class="k">音高偏移</span><span class="v">+12.0 半音</span></div>
-          <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
-          <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
-          <div class="field"><span class="k">输入增益</span><span class="v">-2.0 dB</span></div>
-          <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
-          <div class="field"><span class="k">覆盖区间</span><span class="v">3.00 – 5.00 秒</span></div>
-          <div class="field"><span class="k">合成耗时</span><span class="v">12.3 秒</span></div>
-        </div>
-      </aside>
     </div>
 
     <div class="bottom">
@@ -521,9 +574,9 @@
     <div><span class="mark">1</span><span><strong>音色库</strong> 选择参考音频，写入当前副本下一次合成要用的音色。</span></div>
     <div><span class="mark">2</span><span><strong>钢琴卷</strong> 在时间轴上按下或拖动左键，会把宿主播放头写到对应时刻。双指滚动仍然平移视口。</span></div>
     <div><span class="mark">3</span><span><strong>坐标格与圆圈 i</strong> 坐标格宽 248 像素、高 22 像素；圆圈 i 在它右边，同样 22 像素高。按住 i 只切换下面那一块为当前内容。</span></div>
-    <div><span class="mark">4</span><span><strong>槽位条</strong> 右边栏顶部，始终显示。左边 A/B 选当前副本，右边旁通与清空作用在这个副本上。</span></div>
-    <div><span class="mark">5</span><span><strong>合成参数</strong> 右边栏主体默认显示这一块，高度铺满，没有上下滚动条。</span></div>
-    <div><span class="mark">6</span><span><strong>当前内容</strong> 按住圆圈 i 时占据右边栏主体：只读快照，没有按钮。</span></div>
+    <div><span class="mark">4</span><span><strong>槽位条</strong> 参数栏顶部，始终显示。左边 A/B 选当前副本，右边旁通与清空作用在这个副本上。</span></div>
+    <div><span class="mark">5</span><span><strong>合成参数</strong> 音色库与钢琴卷之间，高度铺满，没有上下滚动条。</span></div>
+    <div><span class="mark">6</span><span><strong>当前内容</strong> 按住圆圈 i 时占据参数栏主体：只读快照，没有按钮。</span></div>
     <div><span class="mark">7</span><span><strong>底栏与过程格</strong> 过程格宽 280 像素。空闲写「空闲」。进行中写阶段与百分比。完成、失败、取消后那个字再停三秒，然后回到空闲。</span></div>
   </div>
 </div>

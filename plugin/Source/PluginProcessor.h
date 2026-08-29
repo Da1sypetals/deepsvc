@@ -78,6 +78,7 @@ struct PluginPianoRollSessionState
 
 class DeepSvcAudioProcessor : public juce::AudioProcessor
                             , public juce::AudioProcessorARAExtension
+                            , private juce::ChangeListener
 {
 public:
     DeepSvcAudioProcessor();
@@ -116,6 +117,9 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     PlayHeadState playHeadState;
 
+    void mirrorWorkingParamsFromStore();
+    bool isMirroringWorkingParams() const noexcept { return mirroringWorkingParams; }
+
     // 钢琴卷视口会话记忆：只在消息线程访问，随处理器生命周期存在，不进归档
     void rememberPianoRollViewport (PianoRollPlacementIdentity placement,
                                     PianoRollViewportPrimitive viewport);
@@ -125,7 +129,10 @@ public:
     void setLastActivePianoRollPlacement (const PianoRollPlacementIdentity& placement) noexcept;
 
 private:
+    void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+
     PluginPianoRollSessionState pianoRollSession;
+    bool mirroringWorkingParams = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DeepSvcAudioProcessor)
 };

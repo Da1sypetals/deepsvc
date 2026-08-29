@@ -28,6 +28,7 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
     void parentHierarchyChanged() override;
+    void applyProcessorWorkingTimbre();
 
 private:
     void timerCallback() override;
@@ -45,7 +46,7 @@ private:
     void startSynth();
     void cancelJobs();
     void switchToSlot (int slot);
-    void syncUiFromActiveSlot();
+    void syncDisplayedSlot();
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
 
@@ -69,7 +70,6 @@ private:
     ContentKey presentedContentKey;
     uint64_t presentedContentRevision = 0;
     int displayedSlot = -1;
-    bool syncingParamsFromSlot = false;
 
     std::optional<uint64_t> selectionRevisionAtStart;
 
@@ -85,6 +85,8 @@ private:
     juce::String lingerText;
     juce::Colour lingerColour { 0xFF7A5C68 };
     double lingerUntilMs = 0.0;
+
+    bool applyingWorkingTimbre = false;
 
     static constexpr int kTimbrePanelWidth = 200;
     static constexpr int kBottomBarHeight = 48;

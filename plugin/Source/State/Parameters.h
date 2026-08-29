@@ -23,11 +23,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 // 从 APVTS 状态生成合成参数，量化到引擎要求的步进（cfg_rate 0.05、input_gain_db 0.5 dB）
 EngineSynthParams makeSynthParams (const juce::AudioProcessorValueTreeState& state);
 
-// 把槽位参数推进 APVTS（A/B 切换时，docs/ara.md 第 4.1 节），经 setValueNotifyingHost 通知宿主
+// 把工作参数推进 APVTS，供界面旋钮显示
 void pushSynthParamsToApvts (juce::AudioProcessorValueTreeState& state, const EngineSynthParams& params);
 
 // 参数的归档 JSON 表示（docs/ara.md 第 4.2 节）
 juce::var synthParamsToJson (const EngineSynthParams& params);
 EngineSynthParams synthParamsFromJson (const juce::var& json);
+
+void saveWorkingState (const EngineSynthParams& params, const juce::String& timbreFile);
+bool loadWorkingState (EngineSynthParams& params, juce::String& timbreFile);
 
 } // namespace deepsvc::parameters

@@ -6,7 +6,7 @@
 
 ARA 里一份可编辑内容对应一个 AudioModification。它总是属于一个 AudioSource，并拥有任意数量的 PlaybackRegion。AudioModification 在存档时持久。接口注释见 ARAInterface.h 约 900-903 行。
 
-插件的音高数据、合成音频、dataRevision、音色与参数写在 AudioModification 上。本仓库对应类是 DeepSvcAudioModification。
+插件的音高数据、合成音频、dataRevision、合成快照写在 AudioModification 上。本仓库对应类是 DeepSvcAudioModification。工作参数写在进程内一份 WorkingParamsStore。
 
 PlaybackRegion 描述这一块在文件里的窗口、在时间线上的放置、以及所属 RegionSequence。插件实时读取这些字段，不另存副本。
 

@@ -1,12 +1,12 @@
 # 目标数据结构
 
-插件状态挂在 AudioModification 上。时间线上的一块是 PlaybackRegion，只描述窗口与放置。
+音高、合成结果与合成快照挂在 AudioModification 上。工作参数（音色、F0 检测算法、扩散步数、音高偏移等）是进程内一份，写入 ~/Library/deepsvc/working-params.json。时间线上的一块是 PlaybackRegion，只描述窗口与放置。
 
 ## 1. 中心
 
 数据树的根是 AudioModification。一份可编辑内容对应一份 AudioModification。
 
-音高数据、合成音频、dataRevision、两个槽位里的音色与参数，全部是该 AudioModification 的成员。
+音高数据、合成音频、dataRevision、两个槽位里的合成快照，全部是该 AudioModification 的成员。
 
 同一份 AudioModification 拥有任意数量的 PlaybackRegion。这些区域读写同一份成员。改其中一块，其余块一起变。
 
@@ -41,7 +41,8 @@ AudioSource 是样本来源。AudioModification 通过 getAudioSource() 引用�
 - SynthAudio：一次合成得到的样本与覆盖区间，空 optional 表示未合成。
 - 覆盖区间：synthStartTime 含，synthEndTime 不含，文件坐标。标出这段 PCM 在文件里对应哪一段。
 - 尚未合成区间：某个 PlaybackRegion 窗口里、位于覆盖区间之外的文件坐标。回放输出无声，界面标为尚未合成。
-- 槽位：一份 AudioModification 上两个槽位，activeSlot 为 0 或 1。每个槽位各自持有 params、timbreFile、pitchData、synthAudio、bypass。
+- 槽位：一份 AudioModification 上两个槽位，activeSlot 为 0 或 1。每个槽位各自持有 pitchData、synthAudio、synthParams、synthTimbreFile、bypass。
+- 工作参数：F0 检测算法、扩散步数、音高偏移、音高微调、CFG 强度、输入增益、输出声码器、当前音色。进程内一份（WorkingParamsStore），磁盘只写 working-params.json。各插件实例的 APVTS 从这份镜像，供旋钮绑定。拧旋钮或改音色改的是这一份；其它 AudioModification 上已经合成的音频不变。点合成时用当前工作参数，完成后把当时的参数与音色写入该槽位的 synthParams / synthTimbreFile。
 - dataRevision：该 AudioModification 上音高或合成被整体替换的次数，初始 0。
 - taskId：JobManager 一次分析或合成的编号，结果写回发起请求的那份 AudioModification。
 
@@ -86,8 +87,6 @@ AudioModification：
 
 槽位：
 
-- params：当前编辑中的合成参数。
-- timbreFile：当前选中的音色文件名。
 - pitchData：optional PitchData。
 - synthAudio：optional SynthAudio。
 - synthParams / synthTimbreFile：把合成结果存进 synthAudio 时所用的参数与音色。
@@ -125,6 +124,7 @@ PlaybackRegion：
 
 - 一条归档记录对应一份 AudioModification。键为 getPersistentID()。JSON 含 slots、activeSlot、dataRevision。
 - 读回时按该键从宿主对象图取 AudioModification 并恢复成员。
+- 工作参数不进 AudioModification 归档，也不进插件实例状态。进程内一份，写入 working-params.json。
 
 ## 5. 宿主操作
 
@@ -162,7 +162,8 @@ PlaybackRegion：
 
 ## 7. 禁止
 
-插件状态只写在 AudioModification 上。
+音高与合成结果只写在 AudioModification 上。
+工作参数只写在进程内一份，并写入 working-params.json。
 AudioSource 不得作为数据树的根。
 不按 PlaybackRegion 建第二份成员，不用 PlaybackRegion::getPersistentID() 归档。
 不保存窗口、放置、RegionSequence 的副本。

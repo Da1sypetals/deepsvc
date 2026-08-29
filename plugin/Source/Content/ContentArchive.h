@@ -34,8 +34,6 @@ inline std::vector<float> floatVectorFromJson (const juce::var& json)
 inline juce::var slotToJson (const Slot& slot)
 {
     auto* object = new juce::DynamicObject();
-    object->setProperty ("params", parameters::synthParamsToJson (slot.params));
-    object->setProperty ("timbreFile", slot.timbreFile);
     object->setProperty ("bypass", slot.bypass);
     if (slot.pitchData.has_value())
     {
@@ -61,8 +59,6 @@ inline juce::var slotToJson (const Slot& slot)
 
 inline void slotFromJson (Slot& slot, const juce::var& json)
 {
-    slot.params = parameters::synthParamsFromJson (json.getProperty ("params", juce::var()));
-    slot.timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
     slot.bypass = static_cast<bool> (json.getProperty ("bypass", false));
 
     const auto pitchJson = json.getProperty ("pitchData", juce::var());

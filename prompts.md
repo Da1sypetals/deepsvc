@@ -8,7 +8,8 @@ T: 难度分级而非重要性分级。
 
 
 ## T1
-
+扩散步数ui布局：[-][value][+]
+上方主UI布局改为[timbre library][parameters][piano roll]
 
 ## T2
 

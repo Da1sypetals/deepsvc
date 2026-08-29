@@ -89,8 +89,6 @@ public:
 
     void setActiveSlot (ContentKey key, int slot);
     void setSlotBypass (ContentKey key, int slot, bool bypass);
-    void applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile);
-    void applySlotParams (ContentKey key, int slot, const EngineSynthParams& params);
 
     void applyF0 (ContentKey key, int slot, std::vector<float> times, std::vector<float> values);
     void applyRenderedAudio (ContentKey key,

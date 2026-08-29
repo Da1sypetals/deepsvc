@@ -47,10 +47,8 @@ struct WorkingRange
 
 struct Slot
 {
-    EngineSynthParams params;
     EngineSynthParams synthParams;
     juce::String synthTimbreFile;
-    juce::String timbreFile;
     std::optional<PitchData> pitchData;
     std::optional<SynthAudio> synthAudio;
     std::optional<double> lastSynthElapsedSeconds;

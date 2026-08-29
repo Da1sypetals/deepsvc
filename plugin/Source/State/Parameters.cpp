@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "../Directories.h"
+
 // 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
 // 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
 // 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分
@@ -79,7 +81,7 @@ void pushSynthParamsToApvts (juce::AudioProcessorValueTreeState& state, const En
     const auto setValue = [&state] (const juce::ParameterID& id, float plainValue)
     {
         if (auto* parameter = state.getParameter (id.getParamID()))
-            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+            parameter->setValue (parameter->convertTo0to1 (plainValue));
     };
 
     setValue (f0Estimator, params.f0Estimator == EngineEstimator::fcpe ? 1.0f : 0.0f);
@@ -122,6 +124,35 @@ EngineSynthParams synthParamsFromJson (const juce::var& json)
         -12.0, 3.0, static_cast<double> (json.getProperty ("inputGainDb", -2.0))));
     params.keepFirstVocoderOutput = static_cast<int> (json.getProperty ("outputVocoder", 1)) == 0;
     return params;
+}
+
+void saveWorkingState (const EngineSynthParams& params, const juce::String& timbreFile)
+{
+    auto* object = new juce::DynamicObject();
+    object->setProperty ("params", synthParamsToJson (params));
+    object->setProperty ("timbreFile", timbreFile);
+    auto file = directories::workingStateFile();
+    file.getParentDirectory().createDirectory();
+    if (! file.replaceWithText (juce::JSON::toString (juce::var (object))))
+        jassertfalse;
+}
+
+bool loadWorkingState (EngineSynthParams& params, juce::String& timbreFile)
+{
+    auto file = directories::workingStateFile();
+    if (! file.existsAsFile())
+        return false;
+
+    const auto json = juce::JSON::parse (file);
+    if (! json.isObject())
+    {
+        jassertfalse;
+        return false;
+    }
+
+    params = synthParamsFromJson (json.getProperty ("params", juce::var()));
+    timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
+    return true;
 }
 
 } // namespace deepsvc::parameters

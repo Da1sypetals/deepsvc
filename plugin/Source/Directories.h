@@ -17,4 +17,9 @@ inline juce::File timbresDirectory()
     return applicationSupport().getChildFile ("Timbres");
 }
 
+inline juce::File workingStateFile()
+{
+    return applicationSupport().getChildFile ("working-params.json");
+}
+
 } // namespace deepsvc::directories

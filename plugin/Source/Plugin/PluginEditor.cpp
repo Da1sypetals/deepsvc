@@ -6,6 +6,7 @@
 #include "../ARA/DeepSvcPlaybackRenderer.h"
 #include "../DebugLog.h"
 #include "../Directories.h"
+#include "../State/WorkingParamsStore.h"
 #include "../UI/UIColors.h"
 
 namespace deepsvc
@@ -130,7 +131,7 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     };
     rightColumn.slotBar.onClearRequested = [this] { confirmClearSynth(); };
 
-    // APVTS 参数变化写回激活槽位（docs/ara.md 第 4.1 节）
+    // APVTS 参数变化写入进程内工作参数
     for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
                             &parameters::pitchShift, &parameters::pitchFineTuneCents,
                             &parameters::cfgRate,
@@ -148,13 +149,14 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
 
     overviewStrip.addListener (this);
 
-    // 音色选择写入激活槽位并随内容持久化
     timbrePanel.onSelectionChanged = [this] (const juce::String& timbre)
     {
-        if (auto* dc = documentController())
-            if (presentedContentKey.isValid() && displayedSlot >= 0 && timbre.isNotEmpty())
-                dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
+        if (applyingWorkingTimbre || timbre.isEmpty())
+            return;
+        WorkingParamsStore::getInstance().setTimbreFile (timbre);
     };
+    audioProcessor.mirrorWorkingParamsFromStore();
+    applyProcessorWorkingTimbre();
 
     // 用户手动改变视口时记入会话记忆
     pianoRoll.onUserViewportChanged = [this] { rememberPresentedPianoRollViewport(); };
@@ -266,14 +268,12 @@ void DeepSvcEditor::resized()
     auto bar = bounds.removeFromBottom (kBottomBarHeight);
     bounds.removeFromBottom (8);
 
-    // 左栏音色库
     timbrePanel.setBounds (bounds.removeFromLeft (kTimbrePanelWidth));
     bounds.removeFromLeft (8);
 
-    rightColumn.setBounds (bounds.removeFromRight (RightColumn::kWidth));
-    bounds.removeFromRight (8);
+    rightColumn.setBounds (bounds.removeFromLeft (RightColumn::kWidth));
+    bounds.removeFromLeft (8);
 
-    // 中部钢琴卷
     pianoRoll.setBounds (bounds);
 
     // Overview strip：覆盖在钢琴卷时间线视口底部
@@ -505,7 +505,7 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
 
         // 切换音频块后按新内容的激活槽位同步界面
         displayedSlot = -1;
-        syncUiFromActiveSlot();
+        syncDisplayedSlot();
 
         if (const auto restored = audioProcessor.readPianoRollViewport (*activeIdentity))
         {
@@ -578,17 +578,19 @@ void DeepSvcEditor::updateJobStatusDisplay()
         if (const auto* modification = dc->findModification (presentedContentKey))
         {
             if (displayedSlot != modification->activeSlot)
-                syncUiFromActiveSlot();
+                syncDisplayedSlot();
 
             const auto& slot = modification->active();
             status = dc->jobStatusFor (presentedContentKey, modification->activeSlot);
+            const auto& store = WorkingParamsStore::getInstance();
 
             copyState.hasModification = true;
             copyState.hasPitch = slot.pitchData.has_value() && ! slot.pitchData->f0Values.empty();
             copyState.hasSynth = slot.hasSynthAudio();
             copyState.bypass = slot.bypass;
             copyState.stale = copyState.hasSynth
-                && (slot.synthParams != slot.params || slot.synthTimbreFile != slot.timbreFile);
+                && (slot.synthParams != store.params()
+                    || slot.synthTimbreFile != store.timbreFile());
             copyState.synthTimbreFile = slot.synthTimbreFile;
             copyState.synthParams = slot.synthParams;
             if (slot.synthAudio.has_value())
@@ -725,7 +727,7 @@ void DeepSvcEditor::startDetect()
     if (dc == nullptr || ! presentedContentKey.isValid() || displayedSlot < 0)
         return;
 
-    const auto estimator = parameters::makeSynthParams (audioProcessor.apvts).f0Estimator;
+    const auto estimator = WorkingParamsStore::getInstance().params().f0Estimator;
     dc->requestDetect (presentedContentKey, displayedSlot, estimator);
 }
 
@@ -735,7 +737,8 @@ void DeepSvcEditor::startSynth()
     if (dc == nullptr || ! presentedContentKey.isValid() || displayedSlot < 0)
         return;
 
-    const auto timbre = timbrePanel.selectedTimbre();
+    const auto& store = WorkingParamsStore::getInstance();
+    const auto timbre = store.timbreFile();
     if (timbre.isEmpty())
     {
         transientMessage = juce::String (u8"请先在音色库中选择参考音频");
@@ -743,7 +746,7 @@ void DeepSvcEditor::startSynth()
         return;
     }
 
-    const auto params = parameters::makeSynthParams (audioProcessor.apvts);
+    const auto params = store.params();
 
     // 音高必须覆盖当前工作区间：引擎队列按提交顺序串行执行，
     // 检测完成后才轮到合成（docs/ara.md 第 6.2 节）
@@ -754,7 +757,6 @@ void DeepSvcEditor::startSynth()
             dc->requestDetect (presentedContentKey, displayedSlot, params.f0Estimator);
     }
 
-    dc->applyTimbreFile (presentedContentKey, displayedSlot, timbre);
     dc->requestSynth (presentedContentKey, displayedSlot,
                       timbreLibrary.fileFor (timbre).getFullPathName(),
                       params);
@@ -774,11 +776,11 @@ void DeepSvcEditor::switchToSlot (int slot)
         return;
 
     dc->setActiveSlot (presentedContentKey, slot);
-    syncUiFromActiveSlot();
+    displayedSlot = slot;
     updateJobStatusDisplay();
 }
 
-void DeepSvcEditor::syncUiFromActiveSlot()
+void DeepSvcEditor::syncDisplayedSlot()
 {
     auto* dc = documentController();
     if (dc == nullptr || ! presentedContentKey.isValid())
@@ -789,32 +791,34 @@ void DeepSvcEditor::syncUiFromActiveSlot()
         return;
 
     displayedSlot = modification->activeSlot;
-    const auto& slot = modification->active();
+}
 
-    timbrePanel.selectTimbre (slot.timbreFile);
-
-    // 槽位参数推回 APVTS，参数面板显示激活槽位的值
-    syncingParamsFromSlot = true;
-    parameters::pushSynthParamsToApvts (audioProcessor.apvts, slot.params);
-    syncingParamsFromSlot = false;
+void DeepSvcEditor::applyProcessorWorkingTimbre()
+{
+    const auto timbre = WorkingParamsStore::getInstance().timbreFile();
+    if (timbre.isEmpty())
+        return;
+    applyingWorkingTimbre = true;
+    timbrePanel.selectTimbre (timbre);
+    applyingWorkingTimbre = false;
 }
 
 void DeepSvcEditor::parameterChanged (const juce::String&, float)
 {
-    if (syncingParamsFromSlot)
+    if (audioProcessor.isMirroringWorkingParams())
         return;
 
-    // 宿主自动化可能在任意线程触发；槽位写回只在消息线程做
     if (! juce::MessageManager::getInstance()->isThisTheMessageThread())
     {
-        juce::MessageManager::callAsync ([this] { parameterChanged ({}, 0.0f); });
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<DeepSvcEditor> (this)]
+        {
+            if (safe != nullptr)
+                safe->parameterChanged ({}, 0.0f);
+        });
         return;
     }
 
-    if (auto* dc = documentController())
-        if (presentedContentKey.isValid() && displayedSlot >= 0)
-            dc->applySlotParams (presentedContentKey, displayedSlot,
-                                 parameters::makeSynthParams (audioProcessor.apvts));
+    WorkingParamsStore::getInstance().setParams (parameters::makeSynthParams (audioProcessor.apvts));
 }
 
 } // namespace deepsvc

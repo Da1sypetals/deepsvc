@@ -24,10 +24,17 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
 
     stepsLabel.setText (juce::String (u8"扩散步数"), juce::dontSendNotification);
     addAndMakeVisible (stepsLabel);
-    stepsSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 56, 20);
-    addAndMakeVisible (stepsSlider);
-    stepsAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        apvts, parameters::diffusionSteps.getParamID(), stepsSlider);
+    stepsValueLabel.setJustificationType (juce::Justification::centred);
+    stepsValueLabel.setColour (juce::Label::backgroundColourId, UIColors::pink050);
+    stepsValueLabel.setColour (juce::Label::textColourId, UIColors::ink900);
+    stepsValueLabel.setColour (juce::Label::outlineColourId, UIColors::pink200);
+    addAndMakeVisible (stepsValueLabel);
+    stepsDownButton.onClick = [this] { nudgeDiffusionSteps (-1); };
+    stepsUpButton.onClick = [this] { nudgeDiffusionSteps (1); };
+    addAndMakeVisible (stepsDownButton);
+    addAndMakeVisible (stepsUpButton);
+    apvts.addParameterListener (parameters::diffusionSteps.getParamID(), this);
+    syncDiffusionStepsValue();
 
     pitchShiftLabel.setText (juce::String (u8"音高偏移 (半音)"), juce::dontSendNotification);
     addAndMakeVisible (pitchShiftLabel);
@@ -36,7 +43,6 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     pitchShiftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         apvts, parameters::pitchShift.getParamID(), pitchShiftSlider);
 
-    // 八度快捷按钮：直接设为 -12 / +12
     octaveDownButton.onClick = [this] { pitchShiftSlider.setValue (-12.0, juce::sendNotificationSync); };
     octaveUpButton.onClick = [this] { pitchShiftSlider.setValue (12.0, juce::sendNotificationSync); };
     addAndMakeVisible (octaveDownButton);
@@ -48,6 +54,17 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     addAndMakeVisible (pitchFineTuneSlider);
     pitchFineTuneAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         apvts, parameters::pitchFineTuneCents.getParamID(), pitchFineTuneSlider);
+
+    fineTuneDownButton.onClick = [this]
+    {
+        pitchFineTuneSlider.setValue (pitchFineTuneSlider.getValue() - 5.0, juce::sendNotificationSync);
+    };
+    fineTuneUpButton.onClick = [this]
+    {
+        pitchFineTuneSlider.setValue (pitchFineTuneSlider.getValue() + 5.0, juce::sendNotificationSync);
+    };
+    addAndMakeVisible (fineTuneDownButton);
+    addAndMakeVisible (fineTuneUpButton);
 
     cfgLabel.setText (juce::String (u8"CFG 强度"), juce::dontSendNotification);
     addAndMakeVisible (cfgLabel);
@@ -70,6 +87,46 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
     addAndMakeVisible (vocoderCombo);
     vocoderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         apvts, parameters::outputVocoder.getParamID(), vocoderCombo);
+}
+
+ParameterPanel::~ParameterPanel()
+{
+    apvts.removeParameterListener (parameters::diffusionSteps.getParamID(), this);
+}
+
+void ParameterPanel::nudgeDiffusionSteps (int delta)
+{
+    auto* parameter = apvts.getParameter (parameters::diffusionSteps.getParamID());
+    if (parameter == nullptr)
+        return;
+    const int current = juce::roundToInt (parameter->convertFrom0to1 (parameter->getValue()));
+    const int next = juce::jlimit (1, 64, current + delta);
+    parameter->setValueNotifyingHost (parameter->convertTo0to1 (static_cast<float> (next)));
+}
+
+void ParameterPanel::syncDiffusionStepsValue()
+{
+    auto* parameter = apvts.getParameter (parameters::diffusionSteps.getParamID());
+    if (parameter == nullptr)
+        return;
+    const int value = juce::roundToInt (parameter->convertFrom0to1 (parameter->getValue()));
+    stepsValueLabel.setText (juce::String (value), juce::dontSendNotification);
+}
+
+void ParameterPanel::parameterChanged (const juce::String& parameterID, float)
+{
+    if (parameterID != parameters::diffusionSteps.getParamID())
+        return;
+    if (! juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ParameterPanel> (this)]
+        {
+            if (safe != nullptr)
+                safe->syncDiffusionStepsValue();
+        });
+        return;
+    }
+    syncDiffusionStepsValue();
 }
 
 void ParameterPanel::paint (juce::Graphics& g)
@@ -114,22 +171,37 @@ void ParameterPanel::resized()
     };
 
     placeRow (estimatorLabel, estimatorCombo);
-    placeRow (stepsLabel, stepsSlider);
 
-    // 音高偏移：滑杆 + 八度快捷按钮
-    pitchShiftLabel.setBounds (area.removeFromTop (labelHeight));
+    stepsLabel.setBounds (area.removeFromTop (labelHeight));
     area.removeFromTop (2);
     {
         auto row = area.removeFromTop (controlHeight);
-        octaveDownButton.setBounds (row.removeFromRight (34));
-        row.removeFromRight (4);
-        octaveUpButton.setBounds (row.removeFromRight (34));
-        row.removeFromRight (6);
-        pitchShiftSlider.setBounds (row);
+        stepsDownButton.setBounds (row.removeFromLeft (36));
+        row.removeFromLeft (4);
+        stepsValueLabel.setBounds (row.removeFromLeft (56));
+        row.removeFromLeft (4);
+        stepsUpButton.setBounds (row.removeFromLeft (36));
     }
     area.removeFromTop (rowGap);
 
-    placeRow (pitchFineTuneLabel, pitchFineTuneSlider);
+    auto placeSliderWithStepButtons = [&] (juce::Label& label,
+                                           juce::Button& downButton,
+                                           juce::Slider& slider,
+                                           juce::Button& upButton)
+    {
+        label.setBounds (area.removeFromTop (labelHeight));
+        area.removeFromTop (2);
+        auto row = area.removeFromTop (controlHeight);
+        downButton.setBounds (row.removeFromLeft (36));
+        row.removeFromLeft (4);
+        upButton.setBounds (row.removeFromRight (36));
+        row.removeFromRight (4);
+        slider.setBounds (row);
+        area.removeFromTop (rowGap);
+    };
+
+    placeSliderWithStepButtons (pitchShiftLabel, octaveDownButton, pitchShiftSlider, octaveUpButton);
+    placeSliderWithStepButtons (pitchFineTuneLabel, fineTuneDownButton, pitchFineTuneSlider, fineTuneUpButton);
     placeRow (cfgLabel, cfgSlider);
     placeRow (gainLabel, gainSlider);
     placeRow (vocoderLabel, vocoderCombo);

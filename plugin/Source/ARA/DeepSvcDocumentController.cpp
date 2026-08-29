@@ -363,26 +363,6 @@ void DeepSvcDocumentController::setSlotBypass (ContentKey key, int slot, bool by
     refreshRegisteredRenderers (publishModelChange());
 }
 
-void DeepSvcDocumentController::applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile)
-{
-    auto* modification = findModification (key);
-    if (modification == nullptr)
-        return;
-
-    modification->slotAt (slot).timbreFile = timbreFile;
-    notifyPersistedStateChanged (*modification);
-}
-
-void DeepSvcDocumentController::applySlotParams (ContentKey key, int slot, const EngineSynthParams& params)
-{
-    auto* modification = findModification (key);
-    if (modification == nullptr)
-        return;
-
-    modification->slotAt (slot).params = params;
-    notifyPersistedStateChanged (*modification);
-}
-
 void DeepSvcDocumentController::applyF0 (ContentKey key, int slot,
                                          std::vector<float> times, std::vector<float> values)
 {
@@ -497,7 +477,7 @@ void DeepSvcDocumentController::requestSynth (ContentKey key,
     slot = juce::jlimit (0, 1, slot);
     const JobKey jobKey { juce::String (modification->getPersistentID()), slot };
     pendingSynthParams[jobKey] = params;
-    pendingSynthTimbres[jobKey] = modification->slotAt (slot).timbreFile;
+    pendingSynthTimbres[jobKey] = juce::File (timbreAbsolutePath).getFileName();
     pendingSynthRanges[jobKey] = range;
 
     dumpDebugWav ("synth_input", pcm.data(), pcm.size());
