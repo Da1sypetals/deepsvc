@@ -10,7 +10,7 @@
 #include "../Content/ContentKey.h"
 #include "../Engine/JobManager.h"
 #include "../Utils/ContentTimelineProjection.h"
-#include "EventAudioModification.h"
+#include "DeepSvcAudioModification.h"
 
 namespace deepsvc
 {
@@ -33,7 +33,6 @@ public:
 
         ContentKey contentKey;
         uint64_t contentRevision { 0 };
-        double contentDurationSeconds { 0.0 };
         bool hasRenderedAudio { false };
         bool hasSynthCoverage { false };
         double synthStartTime { 0.0 };
@@ -79,10 +78,10 @@ public:
     void registerPlaybackRenderer (DeepSvcPlaybackRenderer& renderer);
     void unregisterPlaybackRenderer (DeepSvcPlaybackRenderer& renderer);
 
-    EventAudioModification* findEvent (ContentKey key);
-    const EventAudioModification* findEvent (ContentKey key) const;
-    EventAudioModification* findEventByPersistentId (const juce::String& persistentId);
-    const EventAudioModification* findEventByPersistentId (const juce::String& persistentId) const;
+    DeepSvcAudioModification* findModification (ContentKey key);
+    const DeepSvcAudioModification* findModification (ContentKey key) const;
+    DeepSvcAudioModification* findModificationByPersistentId (const juce::String& persistentId);
+    const DeepSvcAudioModification* findModificationByPersistentId (const juce::String& persistentId) const;
 
     uint64_t readContentRevision (ContentKey key) const;
     int readActiveSlot (ContentKey key) const;
@@ -100,7 +99,10 @@ public:
                              double synthStartTime,
                              double synthEndTime,
                              const EngineSynthParams& synthParams,
-                             const juce::String& synthTimbreFile);
+                             const juce::String& synthTimbreFile,
+                             double elapsedSeconds);
+
+    void clearSynthAudio (ContentKey key, int slot);
 
     void requestDetect (ContentKey key, int slot, EngineEstimator estimator);
     void requestSynth (ContentKey key,
@@ -165,10 +167,11 @@ private:
     void synthFinished (JobKey key,
                         std::vector<float> audio,
                         std::vector<float> firstVocoder,
-                        std::vector<float> f0) override;
+                        std::vector<float> f0,
+                        double elapsedSeconds) override;
 
-    EventAudioModification* asEvent (juce::ARAAudioModification* audioModification) const;
-    const EventAudioModification* asEvent (const juce::ARAAudioModification* audioModification) const;
+    DeepSvcAudioModification* asModification (juce::ARAAudioModification* audioModification) const;
+    const DeepSvcAudioModification* asModification (const juce::ARAAudioModification* audioModification) const;
 
     PlaybackRegionProjection makeProjection (juce::ARAPlaybackRegion* region) const;
     std::vector<PlaybackRegionProjection> buildProjections() const;
@@ -176,12 +179,12 @@ private:
     void refreshRegisteredRenderers (const std::vector<DeepSvcPlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
 
-    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (EventAudioModification& event);
-    void forEachEvent (const std::function<void (EventAudioModification&)>& fn);
-    void forEachEvent (const std::function<void (const EventAudioModification&)>& fn) const;
+    std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (DeepSvcAudioModification& modification);
+    void forEachModification (const std::function<void (DeepSvcAudioModification&)>& fn);
+    void forEachModification (const std::function<void (const DeepSvcAudioModification&)>& fn) const;
 
     void dumpAraGraph (const juce::String& reason);
-    static void notifyPersistedStateChanged (EventAudioModification& event);
+    static void notifyPersistedStateChanged (DeepSvcAudioModification& modification);
 
     std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions;
     uint64_t editorSelectionRevision = 0;
@@ -190,8 +193,8 @@ private:
     JobManager jobManager;
     std::map<JobKey, EngineSynthParams> pendingSynthParams;
     std::map<JobKey, juce::String> pendingSynthTimbres;
-    std::map<JobKey, FileRange> pendingDetectRanges;
-    std::map<JobKey, FileRange> pendingSynthRanges;
+    std::map<JobKey, WorkingRange> pendingDetectRanges;
+    std::map<JobKey, WorkingRange> pendingSynthRanges;
 
     JUCE_DECLARE_NON_COPYABLE (DeepSvcDocumentController)
 };

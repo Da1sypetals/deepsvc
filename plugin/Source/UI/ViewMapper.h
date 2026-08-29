@@ -43,7 +43,7 @@ struct ViewMapper
         return maxMidi - (y + verticalScrollOffset) / pixelsPerSemitone;
     }
 
-    // 琴键车道式：音高曲线落在车道中央，频率换算偏移半个半音
+    // 琴键车道式：音高曲线位于车道中央，频率换算偏移半个半音
     float freqToMidi (float hz) const
     {
         return static_cast<float> (12.0 * std::log2 (hz / 440.0) + 69.0) - 0.5f;

@@ -1,17 +1,17 @@
-#include "EventAudioModification.h"
+#include "DeepSvcAudioModification.h"
 
 #include <algorithm>
 
 namespace deepsvc
 {
 
-EventAudioModification::EventAudioModification (
+DeepSvcAudioModification::DeepSvcAudioModification (
     juce::ARAAudioSource* audioSource,
     ARA::ARAAudioModificationHostRef hostRef,
     const juce::ARAAudioModification* optionalModificationToClone)
     : juce::ARAAudioModification (audioSource, hostRef, optionalModificationToClone)
 {
-    if (const auto* clone = dynamic_cast<const EventAudioModification*> (optionalModificationToClone))
+    if (const auto* clone = dynamic_cast<const DeepSvcAudioModification*> (optionalModificationToClone))
     {
         slots = clone->slots;
         activeSlot = clone->activeSlot;
@@ -21,14 +21,14 @@ EventAudioModification::EventAudioModification (
     bindContentKey();
 }
 
-void EventAudioModification::bindContentKey()
+void DeepSvcAudioModification::bindContentKey()
 {
     contentKey.objectId = static_cast<uint64_t> (juce::String (getPersistentID()).hashCode64());
 }
 
-FileRange EventAudioModification::windowUnion() const
+WorkingRange DeepSvcAudioModification::workingRange() const
 {
-    FileRange range;
+    WorkingRange range;
     bool any = false;
     for (auto* region : getPlaybackRegions())
     {

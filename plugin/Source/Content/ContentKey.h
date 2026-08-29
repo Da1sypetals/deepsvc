@@ -11,7 +11,7 @@ enum class DomainKind : uint8_t
     ARAAudioModification
 };
 
-// 标识一个音频事件（一个 EventAudioModification）。由 persistentID 的哈希生成，不携带指针。
+// 标识一份 AudioModification 可编辑内容。由 persistentID 的哈希生成，不携带指针。
 struct ContentKey
 {
     DomainKind domainKind { DomainKind::ARAAudioModification };

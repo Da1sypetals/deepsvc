@@ -4,7 +4,7 @@
 
 #include <juce_core/juce_core.h>
 
-#include "../ARA/EventAudioModification.h"
+#include "../ARA/DeepSvcAudioModification.h"
 #include "../State/Parameters.h"
 
 namespace deepsvc::archive
@@ -31,7 +31,7 @@ inline std::vector<float> floatVectorFromJson (const juce::var& json)
     return values;
 }
 
-inline juce::var slotToJson (const EventSlot& slot)
+inline juce::var slotToJson (const Slot& slot)
 {
     auto* object = new juce::DynamicObject();
     object->setProperty ("params", parameters::synthParamsToJson (slot.params));
@@ -53,11 +53,13 @@ inline juce::var slotToJson (const EventSlot& slot)
         object->setProperty ("synthAudio", juce::var (synth));
         object->setProperty ("synthParams", parameters::synthParamsToJson (slot.synthParams));
         object->setProperty ("synthTimbreFile", slot.synthTimbreFile);
+        if (slot.lastSynthElapsedSeconds.has_value())
+            object->setProperty ("lastSynthElapsedSeconds", *slot.lastSynthElapsedSeconds);
     }
     return juce::var (object);
 }
 
-inline void slotFromJson (EventSlot& slot, const juce::var& json)
+inline void slotFromJson (Slot& slot, const juce::var& json)
 {
     slot.params = parameters::synthParamsFromJson (json.getProperty ("params", juce::var()));
     slot.timbreFile = json.getProperty ("timbreFile", juce::String()).toString();
@@ -88,35 +90,38 @@ inline void slotFromJson (EventSlot& slot, const juce::var& json)
                 slot.synthAudio = std::move (synth);
                 slot.synthParams = parameters::synthParamsFromJson (json.getProperty ("synthParams", juce::var()));
                 slot.synthTimbreFile = json.getProperty ("synthTimbreFile", juce::String()).toString();
+                const auto elapsedVar = json.getProperty ("lastSynthElapsedSeconds", juce::var());
+                if (! elapsedVar.isVoid())
+                    slot.lastSynthElapsedSeconds = static_cast<double> (elapsedVar);
             }
         }
     }
 }
 
-inline juce::var eventToJson (const EventAudioModification& event)
+inline juce::var modificationToJson (const DeepSvcAudioModification& modification)
 {
     auto* root = new juce::DynamicObject();
-    root->setProperty ("dataRevision", static_cast<juce::int64> (event.dataRevision));
-    root->setProperty ("activeSlot", event.activeSlot);
+    root->setProperty ("dataRevision", static_cast<juce::int64> (modification.dataRevision));
+    root->setProperty ("activeSlot", modification.activeSlot);
     juce::Array<juce::var> slotsJson;
-    for (const auto& slot : event.slots)
+    for (const auto& slot : modification.slots)
         slotsJson.add (slotToJson (slot));
     root->setProperty ("slots", juce::var (slotsJson));
     return juce::var (root);
 }
 
-inline void eventFromJson (EventAudioModification& event, const juce::var& json)
+inline void modificationFromJson (DeepSvcAudioModification& modification, const juce::var& json)
 {
     if (! json.isObject())
         return;
 
-    event.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
+    modification.activeSlot = juce::jlimit (0, 1, static_cast<int> (json.getProperty ("activeSlot", 0)));
     if (const auto* slotsJson = json.getProperty ("slots", juce::var()).getArray())
         for (int s = 0; s < juce::jmin (2, slotsJson->size()); ++s)
-            slotFromJson (event.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
-    event.dataRevision = static_cast<uint64_t> (
+            slotFromJson (modification.slots[static_cast<size_t> (s)], (*slotsJson)[s]);
+    modification.dataRevision = static_cast<uint64_t> (
         static_cast<juce::int64> (json.getProperty ("dataRevision", 0)));
-    ++event.dataRevision;
+    ++modification.dataRevision;
 }
 
 } // namespace deepsvc::archive

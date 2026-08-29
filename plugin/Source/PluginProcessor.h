@@ -58,11 +58,7 @@ struct PianoRollPlacementIdentity
 
     bool operator== (const PianoRollPlacementIdentity& rhs) const noexcept
     {
-        return contentKey == rhs.contentKey
-            && projection.timelineStartSeconds == rhs.projection.timelineStartSeconds
-            && projection.timelineDurationSeconds == rhs.projection.timelineDurationSeconds
-            && projection.contentStartSeconds == rhs.projection.contentStartSeconds
-            && projection.contentDurationSeconds == rhs.projection.contentDurationSeconds;
+        return contentKey == rhs.contentKey && projection.equals (rhs.projection);
     }
 };
 

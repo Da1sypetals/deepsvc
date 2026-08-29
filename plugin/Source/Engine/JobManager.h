@@ -59,7 +59,8 @@ public:
         virtual void synthFinished (JobKey key,
                                     std::vector<float> audio,
                                     std::vector<float> firstVocoder,
-                                    std::vector<float> f0) = 0;
+                                    std::vector<float> f0,
+                                    double elapsedSeconds) = 0;
     };
 
     explicit JobManager (Listener& listener);

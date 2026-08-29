@@ -55,6 +55,7 @@ private:
         ContentKey contentKey;
         std::shared_ptr<const std::vector<float>> audio;
         double synthStartTime = 0.0;
+        double synthEndTime = 0.0;
         std::shared_ptr<const juce::AudioBuffer<float>> sourceAudio;
         double timelineStartSeconds = 0.0;
         double timelineDurationSeconds = 0.0;

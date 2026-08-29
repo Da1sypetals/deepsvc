@@ -158,14 +158,18 @@ void JobManager::engineSynthResult (uint64_t jobId,
                                      f0 = std::move (f0)]() mutable
     {
         JobKey key;
+        double elapsedSeconds = -1.0;
         {
             const juce::ScopedLock lock (stateLock);
             const auto it = jobKeys.find (jobId);
             if (it == jobKeys.end())
                 return;
             key = it->second;
+            if (const auto submitIt = jobSubmitTimeMs.find (jobId); submitIt != jobSubmitTimeMs.end())
+                elapsedSeconds = (juce::Time::getMillisecondCounterHiRes() - submitIt->second) / 1000.0;
         }
-        listener.synthFinished (key, std::move (audio), std::move (firstVocoder), std::move (f0));
+        listener.synthFinished (key, std::move (audio), std::move (firstVocoder), std::move (f0),
+                                elapsedSeconds);
     });
 }
 

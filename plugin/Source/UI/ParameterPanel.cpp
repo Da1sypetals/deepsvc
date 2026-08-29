@@ -83,6 +83,19 @@ void ParameterPanel::paint (juce::Graphics& g)
                 juce::Justification::centredLeft, false);
 }
 
+int ParameterPanel::preferredHeight() noexcept
+{
+    constexpr int padding = 12;
+    constexpr int titleHeight = 30;
+    constexpr int labelHeight = 18;
+    constexpr int controlHeight = 24;
+    constexpr int rowGap = 4;
+    constexpr int labelGap = 2;
+    constexpr int rowCount = 7;
+    const int row = labelHeight + labelGap + controlHeight + rowGap;
+    return padding + titleHeight + row * rowCount + padding;
+}
+
 void ParameterPanel::resized()
 {
     auto area = getLocalBounds().reduced (12);

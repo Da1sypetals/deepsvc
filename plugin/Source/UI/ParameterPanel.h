@@ -18,7 +18,7 @@ public:
     void resized() override;
 
     static constexpr int kWidth = 240;
-    static constexpr int kMinimumPanelHeight = 320;
+    static int preferredHeight() noexcept;
 
 private:
     juce::AudioProcessorValueTreeState& apvts;

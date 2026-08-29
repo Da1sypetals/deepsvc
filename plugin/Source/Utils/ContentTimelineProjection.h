@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 // 对应 OpenTune Source/Utils/ContentTimelineProjection.h
 namespace deepsvc
 {
@@ -15,6 +17,15 @@ struct ContentTimelineProjection
     bool isValid() const noexcept
     {
         return timelineDurationSeconds > 0.0 && contentDurationSeconds > 0.0;
+    }
+
+    bool equals (const ContentTimelineProjection& rhs) const noexcept
+    {
+        constexpr double kEps = 1.0e-9;
+        return std::abs (timelineStartSeconds - rhs.timelineStartSeconds) <= kEps
+            && std::abs (timelineDurationSeconds - rhs.timelineDurationSeconds) <= kEps
+            && std::abs (contentStartSeconds - rhs.contentStartSeconds) <= kEps
+            && std::abs (contentDurationSeconds - rhs.contentDurationSeconds) <= kEps;
     }
 
     double timelineEndSeconds() const noexcept

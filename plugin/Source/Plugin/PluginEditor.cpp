@@ -46,9 +46,7 @@ juce::String jobStateText (const JobStatus& status)
         case JobStatus::State::running:
             break;
         case JobStatus::State::succeeded:
-            return status.elapsedSeconds >= 0.0
-                ? juce::String (u8"完成 · 耗时 ") + juce::String (status.elapsedSeconds, 1) + juce::String (u8" 秒")
-                : juce::String (u8"完成");
+            return juce::String (u8"已完成");
         case JobStatus::State::failed:
             return juce::String (u8"失败：") + status.error;
         case JobStatus::State::cancelled:
@@ -100,7 +98,7 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     , juce::AudioProcessorEditorARAExtension (&p)
     , audioProcessor (p)
     , timbreLibrary (directories::timbresDirectory())
-    , parameterPanel (p.apvts)
+    , rightColumn (p.apvts)
     , timbrePanel (timbreLibrary)
     , pianoRoll (p.playHeadState)
     , overviewStrip (pianoRoll.waveforms())
@@ -114,34 +112,20 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     synthButton.onClick = [this] { startSynth(); };
     cancelButton.onClick = [this] { cancelJobs(); };
 
-    // A/B 槽位切换（docs/ara.md 第 4.1 节）
-    slotAButton.setClickingTogglesState (true);
-    slotBButton.setClickingTogglesState (true);
-    slotAButton.setRadioGroupId (0x5A01);
-    slotBButton.setRadioGroupId (0x5A01);
-    slotAButton.onClick = [this] { switchToSlot (0); };
-    slotBButton.onClick = [this] { switchToSlot (1); };
-
-    bypassButton.setClickingTogglesState (true);
-    bypassButton.setTooltip (juce::String (u8"当前槽位直通原声"));
-    bypassButton.onClick = [this]
-    {
-        if (auto* dc = documentController())
-            if (presentedContentKey.isValid() && displayedSlot >= 0)
-                dc->setSlotBypass (presentedContentKey, displayedSlot, bypassButton.getToggleState());
-    };
-
-    playbackIndicator.setFont (juce::Font (juce::FontOptions (12.0f)));
-    playbackIndicator.setColour (juce::Label::textColourId, UIColors::ink600);
-    playbackIndicator.setJustificationType (juce::Justification::centredLeft);
-
     addAndMakeVisible (detectButton);
     addAndMakeVisible (synthButton);
     addAndMakeVisible (cancelButton);
-    addAndMakeVisible (slotAButton);
-    addAndMakeVisible (slotBButton);
-    addAndMakeVisible (bypassButton);
-    addAndMakeVisible (playbackIndicator);
+    addAndMakeVisible (processCell);
+    addAndMakeVisible (rightColumn);
+
+    rightColumn.slotBar.onSlotChanged = [this] (int slot) { switchToSlot (slot); };
+    rightColumn.slotBar.onBypassChanged = [this] (bool bypass)
+    {
+        if (auto* dc = documentController())
+            if (presentedContentKey.isValid() && displayedSlot >= 0)
+                dc->setSlotBypass (presentedContentKey, displayedSlot, bypass);
+    };
+    rightColumn.slotBar.onClearRequested = [this] { confirmClearSynth(); };
 
     // APVTS 参数变化写回激活槽位（docs/ara.md 第 4.1 节）
     for (const auto* id : { &parameters::f0Estimator, &parameters::diffusionSteps,
@@ -150,21 +134,6 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
                             &parameters::inputGainDb, &parameters::outputVocoder })
         audioProcessor.apvts.addParameterListener (id->getParamID(), this);
 
-    statusLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
-    statusLabel.setColour (juce::Label::textColourId, UIColors::ink600);
-    statusLabel.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (statusLabel);
-
-    staleBadge.setText (juce::String (u8"参数已修改"), juce::dontSendNotification);
-    staleBadge.setFont (juce::Font (juce::FontOptions (12.0f)));
-    staleBadge.setJustificationType (juce::Justification::centred);
-    staleBadge.setColour (juce::Label::textColourId, UIColors::warning);
-    staleBadge.setColour (juce::Label::backgroundColourId, UIColors::warningBg);
-    addChildComponent (staleBadge);
-
-    addChildComponent (progressBar);
-
-    addAndMakeVisible (parameterPanel);
     addAndMakeVisible (timbrePanel);
     addAndMakeVisible (pianoRoll);
     addChildComponent (overviewStrip);
@@ -186,6 +155,8 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
 
     // 用户手动改变视口时记入会话记忆
     pianoRoll.onUserViewportChanged = [this] { rememberPresentedPianoRollViewport(); };
+    pianoRoll.onSeekPlayhead = [this] (double seconds) { requestHostPlaybackPosition (seconds); };
+    pianoRoll.onInfoHoldChanged = [this] (bool held) { rightColumn.setShowingSlotContent (held); };
 
     setResizable (true, true);
     setResizeLimits (860, 480, 2000, 1400);
@@ -296,47 +267,34 @@ void DeepSvcEditor::resized()
     timbrePanel.setBounds (bounds.removeFromLeft (kTimbrePanelWidth));
     bounds.removeFromLeft (8);
 
-    // 右侧参数面板
-    parameterPanel.setBounds (bounds.removeFromRight (ParameterPanel::kWidth));
+    rightColumn.setBounds (bounds.removeFromRight (RightColumn::kWidth));
     bounds.removeFromRight (8);
 
     // 中部钢琴卷
     pianoRoll.setBounds (bounds);
 
     // Overview strip：覆盖在钢琴卷时间线视口底部
+    const int overviewHeight = kOverviewStripHeight + UIColors::scrollBarThickness;
     {
         const auto timelineViewport = pianoRoll.getTimelineViewportBounds();
         const int overviewX = bounds.getX() + 12;
         const int overviewRight = bounds.getX() + timelineViewport.getRight();
         const int overviewBottom = bounds.getY() + timelineViewport.getBottom();
-        const int overviewHeight = kOverviewStripHeight + UIColors::scrollBarThickness;
         overviewStrip.setBounds (overviewX,
                                  overviewBottom - overviewHeight,
                                  overviewRight - overviewX,
                                  overviewHeight);
+        pianoRoll.setCoordinateBottomInset (overviewStrip.isVisible() ? overviewHeight : 0);
     }
 
-    // 底栏：左侧操作按钮与 A/B 槽位，右侧状态（docs/ara.md 第 6.2 节）
     auto row = bar.reduced (0, (kBottomBarHeight - 28) / 2);
     detectButton.setBounds (row.removeFromLeft (88));
     row.removeFromLeft (8);
     synthButton.setBounds (row.removeFromLeft (88));
     row.removeFromLeft (8);
     cancelButton.setBounds (row.removeFromLeft (64));
-    row.removeFromLeft (12);
-    slotAButton.setBounds (row.removeFromLeft (28));
-    slotBButton.setBounds (row.removeFromLeft (28));
-    row.removeFromLeft (8);
-    bypassButton.setBounds (row.removeFromLeft (56));
-    row.removeFromLeft (8);
-    playbackIndicator.setBounds (row.removeFromLeft (150));
-    row.removeFromLeft (8);
-
-    progressBar.setBounds (row.removeFromRight (140));
-    row.removeFromRight (8);
-    staleBadge.setBounds (row.removeFromRight (96));
-    row.removeFromRight (8);
-    statusLabel.setBounds (row);
+    processCell.setBounds (row.removeFromRight (ProcessCell::kWidth).withHeight (ProcessCell::kHeight)
+                               .withY (row.getY() + (row.getHeight() - ProcessCell::kHeight) / 2));
 }
 
 // ---- 心跳同步 ----
@@ -457,7 +415,7 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
         }
     }
 
-    // 本实例渲染的音频块（Event FX：新建实例落在自己所在的音频事件上，取时间线最早的一个）。
+    // 本实例渲染的音频块（Event FX：新建实例出现在自己所在的 PlaybackRegion 上，取时间线最早的一个）。
     // ARA 文档控制器由同文档的全部实例共享，必须只查本实例自己的回放渲染器角色
     if (! activeIdentity.has_value())
     {
@@ -538,7 +496,7 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
                   + " rendererMatched=" + juce::String (rendererAssignedMatched));
 
         // lastActive 只记录显式选区解析出的身份。回退解析（渲染器分配、时间线最早）
-        // 不写 lastActive，否则新建实例在自身信号到达前落到别的音频块上会被永久锁存
+        // 不写 lastActive，否则新建实例在自身信号到达前出现在别的音频块上会被永久锁存
         if (resolvedFromFocused)
             audioProcessor.setLastActivePianoRollPlacement (*activeIdentity);
 
@@ -587,9 +545,9 @@ void DeepSvcEditor::pushEditedContentData()
     std::vector<float> f0Values;
     std::shared_ptr<const juce::AudioBuffer<float>> audio;
 
-    if (const auto* event = dc->findEvent (presentedContentKey))
+    if (const auto* modification = dc->findModification (presentedContentKey))
     {
-        const auto& slot = event->active();
+        const auto& slot = modification->active();
         if (slot.pitchData.has_value())
         {
             f0Times = slot.pitchData->f0Times;
@@ -609,34 +567,39 @@ void DeepSvcEditor::updateJobStatusDisplay()
     auto* dc = documentController();
 
     JobStatus status;
-    bool hasRendered = false;
-    bool stale = false;
-    bool slotBypass = false;
-    juce::String playbackText;
+    CopyPanel::State copyState;
+    SlotBar::State slotState;
 
     if (dc != nullptr && presentedContentKey.isValid())
     {
-        if (const auto* event = dc->findEvent (presentedContentKey))
+        if (const auto* modification = dc->findModification (presentedContentKey))
         {
-            // 激活槽位被外部改变（归档恢复等）时重新同步界面
-            if (displayedSlot != event->activeSlot)
+            if (displayedSlot != modification->activeSlot)
                 syncUiFromActiveSlot();
 
-            const auto& slot = event->active();
-            status = dc->jobStatusFor (presentedContentKey, event->activeSlot);
-            hasRendered = slot.hasSynthAudio();
-            slotBypass = slot.bypass;
+            const auto& slot = modification->active();
+            status = dc->jobStatusFor (presentedContentKey, modification->activeSlot);
 
-            // 参数或音色与上次合成不一致：结果失效
-            stale = hasRendered
+            copyState.hasModification = true;
+            copyState.hasPitch = slot.pitchData.has_value() && ! slot.pitchData->f0Values.empty();
+            copyState.hasSynth = slot.hasSynthAudio();
+            copyState.bypass = slot.bypass;
+            copyState.stale = copyState.hasSynth
                 && (slot.synthParams != slot.params || slot.synthTimbreFile != slot.timbreFile);
+            copyState.synthTimbreFile = slot.synthTimbreFile;
+            copyState.synthParams = slot.synthParams;
+            if (slot.synthAudio.has_value())
+            {
+                copyState.synthStartTime = slot.synthAudio->synthStartTime;
+                copyState.synthEndTime = slot.synthAudio->synthEndTime;
+            }
+            copyState.lastSynthElapsedSeconds = slot.lastSynthElapsedSeconds;
 
-            // 回放指示（docs/ara.md 第 6.7 节）
-            if (slotBypass || ! hasRendered)
-                playbackText = juce::String (u8"原声");
-            else
-                playbackText = juce::String (u8"合成 · 声码器 level ")
-                    + juce::String (slot.synthParams.keepFirstVocoderOutput ? 1 : 2);
+            slotState.hasModification = true;
+            slotState.activeSlot = modification->activeSlot;
+            slotState.hasSynth = copyState.hasSynth;
+            slotState.bypass = slot.bypass;
+            slotState.jobActive = isJobActive (status);
         }
     }
 
@@ -646,23 +609,43 @@ void DeepSvcEditor::updateJobStatusDisplay()
     detectButton.setEnabled (hasContent && ! active);
     synthButton.setEnabled (hasContent && ! active);
     cancelButton.setEnabled (hasContent && active);
-    slotAButton.setEnabled (hasContent);
-    slotBButton.setEnabled (hasContent);
-    bypassButton.setEnabled (hasContent && ! active);
-    bypassButton.setToggleState (slotBypass, juce::dontSendNotification);
-    playbackIndicator.setText (playbackText, juce::dontSendNotification);
 
-    auto text = jobStateText (status);
+    rightColumn.copyPanel.setState (copyState);
+    rightColumn.slotBar.setState (slotState);
+
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    juce::String text;
     auto colour = UIColors::ink600;
-    if (status.state == JobStatus::State::failed)
-        colour = UIColors::failure;
-    else if (status.state == JobStatus::State::succeeded)
-        colour = UIColors::success;
+    bool showFill = false;
+    double fraction = 0.0;
 
-    // 空闲时显示短暂提示（如未选音色）
-    if (text.isEmpty() && transientMessage.isNotEmpty())
+    if (active)
     {
-        if (juce::Time::getMillisecondCounterHiRes() < transientMessageExpiryMs)
+        lingerPosted = false;
+        lingerUntilMs = 0.0;
+        lingerText.clear();
+        text = jobStateText (status);
+        if (status.state == JobStatus::State::failed)
+            colour = UIColors::failure;
+        showFill = status.state == JobStatus::State::running && status.fraction >= 0.0;
+        fraction = showFill ? status.fraction : 0.0;
+    }
+    else
+    {
+        if ((status.state == JobStatus::State::succeeded
+             || status.state == JobStatus::State::failed
+             || status.state == JobStatus::State::cancelled)
+            && ! lingerPosted)
+        {
+            lingerPosted = true;
+            lingerUntilMs = now + 3000.0;
+            lingerText = jobStateText (status);
+            lingerColour = status.state == JobStatus::State::succeeded ? UIColors::success
+                         : status.state == JobStatus::State::failed ? UIColors::failure
+                         : UIColors::ink600;
+        }
+
+        if (transientMessage.isNotEmpty() && now < transientMessageExpiryMs)
         {
             text = transientMessage;
             colour = UIColors::warning;
@@ -670,16 +653,53 @@ void DeepSvcEditor::updateJobStatusDisplay()
         else
         {
             transientMessage.clear();
+            if (now < lingerUntilMs && lingerText.isNotEmpty())
+            {
+                text = lingerText;
+                colour = lingerColour;
+            }
+            else
+            {
+                text = juce::String (u8"空闲");
+                colour = UIColors::ink600;
+            }
         }
     }
 
-    statusLabel.setText (text, juce::dontSendNotification);
-    statusLabel.setColour (juce::Label::textColourId, colour);
+    processCell.setDisplay (text, colour, fraction, showFill);
+}
 
-    progressValue = status.fraction >= 0.0 ? status.fraction : 0.0;
-    progressBar.setVisible (active);
+void DeepSvcEditor::requestHostPlaybackPosition (double seconds)
+{
+    auto* dc = documentController();
+    if (dc == nullptr)
+        return;
+    if (auto* playback = dc->getDocumentController()->getHostPlaybackController())
+        playback->requestSetPlaybackPosition (seconds);
+}
 
-    staleBadge.setVisible (stale && ! active);
+void DeepSvcEditor::confirmClearSynth()
+{
+    auto* dc = documentController();
+    if (dc == nullptr || ! presentedContentKey.isValid() || displayedSlot < 0)
+        return;
+
+    const auto options = juce::MessageBoxOptions()
+        .withIconType (juce::MessageBoxIconType::QuestionIcon)
+        .withTitle (juce::String (u8"清空"))
+        .withMessage (juce::String (u8"清空这个副本的合成音频？"))
+        .withButton (juce::String (u8"清空"))
+        .withButton (juce::String (u8"取消"));
+
+    juce::NativeMessageBox::showAsync (options,
+        [safe = juce::Component::SafePointer<DeepSvcEditor> (this),
+         key = presentedContentKey, slot = displayedSlot] (int result)
+        {
+            if (safe == nullptr || result != 0)
+                return;
+            if (auto* controller = safe->documentController())
+                controller->clearSynthAudio (key, slot);
+        });
 }
 
 void DeepSvcEditor::overviewNavigateRequested (double visibleStartSeconds, double pixelsPerSecond)
@@ -721,12 +741,12 @@ void DeepSvcEditor::startSynth()
 
     const auto params = parameters::makeSynthParams (audioProcessor.apvts);
 
-    // 激活槽位还没有音高数据时先执行音高检测：引擎队列按提交顺序串行执行，
+    // 音高必须覆盖当前工作区间：引擎队列按提交顺序串行执行，
     // 检测完成后才轮到合成（docs/ara.md 第 6.2 节）
-    if (const auto* event = dc->findEvent (presentedContentKey))
+    if (const auto* modification = dc->findModification (presentedContentKey))
     {
-        const auto& slot = event->slotAt (displayedSlot);
-        if (! slot.pitchData.has_value() || slot.pitchData->f0Values.empty())
+        const auto& slot = modification->slotAt (displayedSlot);
+        if (! slot.pitchCoversWorkingRange (modification->workingRange()))
             dc->requestDetect (presentedContentKey, displayedSlot, params.f0Estimator);
     }
 
@@ -751,6 +771,7 @@ void DeepSvcEditor::switchToSlot (int slot)
 
     dc->setActiveSlot (presentedContentKey, slot);
     syncUiFromActiveSlot();
+    updateJobStatusDisplay();
 }
 
 void DeepSvcEditor::syncUiFromActiveSlot()
@@ -759,16 +780,13 @@ void DeepSvcEditor::syncUiFromActiveSlot()
     if (dc == nullptr || ! presentedContentKey.isValid())
         return;
 
-    const auto* event = dc->findEvent (presentedContentKey);
-    if (event == nullptr)
+    const auto* modification = dc->findModification (presentedContentKey);
+    if (modification == nullptr)
         return;
 
-    displayedSlot = event->activeSlot;
-    const auto& slot = event->active();
+    displayedSlot = modification->activeSlot;
+    const auto& slot = modification->active();
 
-    slotAButton.setToggleState (displayedSlot == 0, juce::dontSendNotification);
-    slotBButton.setToggleState (displayedSlot == 1, juce::dontSendNotification);
-    bypassButton.setToggleState (slot.bypass, juce::dontSendNotification);
     timbrePanel.selectTimbre (slot.timbreFile);
 
     // 槽位参数推回 APVTS，参数面板显示激活槽位的值

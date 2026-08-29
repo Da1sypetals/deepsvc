@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "../DebugLog.h"
 #include "UIColors.h"
@@ -38,13 +39,59 @@ double rulerStepSeconds (double pixelsPerSecond, double minPixels)
     return 600.0;
 }
 
+bool placementIsEdited (const TimelineContentPlacement& placement,
+                        ContentKey editedKey,
+                        const ContentTimelineProjection& editedProjection)
+{
+    return placement.contentKey == editedKey && placement.projection.equals (editedProjection);
+}
+
 } // namespace
+
+PianoRollView::InfoHoldButton::InfoHoldButton()
+{
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+}
+
+void PianoRollView::InfoHoldButton::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (held ? UIColors::pink600 : UIColors::pink100);
+    g.fillEllipse (bounds);
+    g.setColour (held ? UIColors::pink600 : UIColors::pink200);
+    g.drawEllipse (bounds, 1.0f);
+    g.setColour (held ? juce::Colours::white : UIColors::ink900);
+    g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::italic)));
+    g.drawText ("i", getLocalBounds(), juce::Justification::centred, false);
+}
+
+void PianoRollView::InfoHoldButton::mouseDown (const juce::MouseEvent&)
+{
+    held = true;
+    if (onHoldChanged)
+        onHoldChanged (true);
+    repaint();
+}
+
+void PianoRollView::InfoHoldButton::mouseUp (const juce::MouseEvent&)
+{
+    held = false;
+    if (onHoldChanged)
+        onHoldChanged (false);
+    repaint();
+}
 
 PianoRollView::PianoRollView (const PlayHeadState& playHeadStateRef)
     : playHeadState (playHeadStateRef)
 {
     verticalScrollBar.addListener (this);
     addAndMakeVisible (verticalScrollBar);
+    addAndMakeVisible (infoButton);
+    infoButton.onHoldChanged = [this] (bool held)
+    {
+        if (onInfoHoldChanged)
+            onInfoHoldChanged (held);
+    };
     startTimerHz (30);
 }
 
@@ -59,11 +106,7 @@ PianoRollView::~PianoRollView()
 
 void PianoRollView::setEditedContent (ContentKey key, const ContentTimelineProjection& projection)
 {
-    if (editedContentKey == key
-        && editedProjection.timelineStartSeconds == projection.timelineStartSeconds
-        && editedProjection.timelineDurationSeconds == projection.timelineDurationSeconds
-        && editedProjection.contentStartSeconds == projection.contentStartSeconds
-        && editedProjection.contentDurationSeconds == projection.contentDurationSeconds)
+    if (editedContentKey == key && editedProjection.equals (projection))
         return;
 
     editedContentKey = key;
@@ -107,10 +150,7 @@ void PianoRollView::setTimelineContentPlacements (std::vector<TimelineContentPla
                                  && lhs.hasSynthCoverage == rhs.hasSynthCoverage
                                  && std::abs (lhs.synthStartTime - rhs.synthStartTime) <= 1.0e-9
                                  && std::abs (lhs.synthEndTime - rhs.synthEndTime) <= 1.0e-9
-                                 && std::abs (lhs.projection.timelineStartSeconds - rhs.projection.timelineStartSeconds) <= 1.0e-9
-                                 && std::abs (lhs.projection.timelineDurationSeconds - rhs.projection.timelineDurationSeconds) <= 1.0e-9
-                                 && std::abs (lhs.projection.contentStartSeconds - rhs.projection.contentStartSeconds) <= 1.0e-9
-                                 && std::abs (lhs.projection.contentDurationSeconds - rhs.projection.contentDurationSeconds) <= 1.0e-9;
+                                 && lhs.projection.equals (rhs.projection);
                          });
 
     if (! changed)
@@ -123,7 +163,7 @@ void PianoRollView::setTimelineContentPlacements (std::vector<TimelineContentPla
 const TimelineContentPlacement* PianoRollView::findEditedPlacement() const noexcept
 {
     for (const auto& placement : placements)
-        if (placement.contentKey == editedContentKey)
+        if (placementIsEdited (placement, editedContentKey, editedProjection))
             return &placement;
     return nullptr;
 }
@@ -392,6 +432,41 @@ void PianoRollView::resized()
     }
 
     updateScrollBarRange();
+    layoutOverlayControls();
+}
+
+void PianoRollView::setCoordinateBottomInset (int pixels) noexcept
+{
+    coordinateBottomInset = juce::jmax (0, pixels);
+    layoutOverlayControls();
+}
+
+juce::Rectangle<int> PianoRollView::infoButtonBounds() const noexcept
+{
+    const int contentRight = pianoKeyWidth + getTimelineContentViewportWidth();
+    const int contentBottom = rulerHeight + getTimelineContentViewportHeight();
+    const int chipBottomLimit = contentBottom - coordinateBottomInset;
+    return { contentRight - kChipMargin - kInfoSize,
+             chipBottomLimit - kInfoSize - kChipMargin,
+             kInfoSize, kInfoSize };
+}
+
+juce::Rectangle<int> PianoRollView::coordinateChipBounds() const noexcept
+{
+    const auto info = infoButtonBounds();
+    return { info.getX() - kInfoGap - kChipWidth, info.getY(), kChipWidth, kChipHeight };
+}
+
+void PianoRollView::layoutOverlayControls()
+{
+    infoButton.setBounds (infoButtonBounds());
+}
+
+void PianoRollView::seekPlayheadAt (int x)
+{
+    const double seconds = juce::jmax (0.0, makeViewMapper().xToTime (x));
+    if (onSeekPlayhead)
+        onSeekPlayhead (seconds);
 }
 
 void PianoRollView::updateScrollBarRange()
@@ -414,49 +489,65 @@ void PianoRollView::scrollBarMoved (juce::ScrollBar* scrollBar, double newRangeS
 
 //==============================================================================
 // 交互：滚轮上下滚动、Shift+滚轮左右滚动、Cmd+滚轮纵向缩放、Cmd+Shift+滚轮横向缩放、
-// 触控板双指两轴滚动、捏合横向缩放、双击适配全长、拖拽双轴平移（docs/ara.md 第 6.5 节）
+// 触控板双指两轴滚动、捏合横向缩放、双击适配全长、
+// 左键在时间轴标尺上按下或拖动写宿主播放头，左键在钢琴卷内容区拖动平移视口
+// （docs/ara.md 第 6.5 节）
 
 void PianoRollView::mouseDown (const juce::MouseEvent& e)
 {
-    if (e.x < pianoKeyWidth)
+    if (! e.mods.isLeftButtonDown() || e.x < pianoKeyWidth)
         return;
 
+    mousePosition = e.getPosition();
+
+    if (e.y >= 0 && e.y < rulerHeight)
+    {
+        isSeeking = true;
+        seekPlayheadAt (e.x);
+        repaint();
+        return;
+    }
+
     isPanning = true;
-    panStartPos = e.getPosition();
-    panStartVisibleStart = timelineCamera.visibleStartSeconds;
-    panStartVerticalOffset = verticalScrollOffset;
-    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    panStartVisibleSeconds = timelineCamera.visibleStartSeconds;
+    panStartVerticalScroll = verticalScrollOffset;
 }
 
 void PianoRollView::mouseDrag (const juce::MouseEvent& e)
 {
+    mousePosition = e.getPosition();
+
+    if (isSeeking)
+    {
+        seekPlayheadAt (e.x);
+        repaint();
+        return;
+    }
+
     if (! isPanning)
         return;
 
-    const int deltaX = e.x - panStartPos.x;
-    const int deltaY = e.y - panStartPos.y;
-
-    // 自由平移：两个轴同时跟随拖拽
-    const float maxScroll = juce::jmax (0.0f, getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
-    verticalScrollOffset = juce::jlimit (0.0f, maxScroll, panStartVerticalOffset - static_cast<float> (deltaY));
-    updateScrollBarRange();
-
-    const double newVisibleStart = panStartVisibleStart - deltaX / timelineCamera.pixelsPerSecond;
+    const double newVisibleStart = panStartVisibleSeconds
+        - static_cast<double> (e.getDistanceFromDragStartX()) / timelineCamera.pixelsPerSecond;
     commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
                                                 newVisibleStart,
                                                 0.0,
                                                 timelineCamera.pixelsPerSecond));
-    repaint();
 
-    userHasManuallyZoomed = true;
+    const float maxScroll = juce::jmax (0.0f,
+        getTotalHeight() - static_cast<float> (getTimelineContentViewportHeight()));
+    verticalScrollOffset = juce::jlimit (0.0f, maxScroll,
+        panStartVerticalScroll - static_cast<float> (e.getDistanceFromDragStartY()));
+    updateScrollBarRange();
     if (onUserViewportChanged)
         onUserViewportChanged();
+    repaint();
 }
 
 void PianoRollView::mouseUp (const juce::MouseEvent&)
 {
+    isSeeking = false;
     isPanning = false;
-    setMouseCursor (juce::MouseCursor::NormalCursor);
 }
 
 void PianoRollView::mouseMove (const juce::MouseEvent& e)
@@ -756,13 +847,13 @@ void PianoRollView::paintPlacements (juce::Graphics& g)
         if (! placement.isValid())
             continue;
 
+        const bool isActive = placementIsEdited (placement, editedContentKey, editedProjection);
+        auto colour = placement.displayColour;
+
         const int x1 = mapper.timeToX (placement.projection.timelineStartSeconds);
         const int x2 = mapper.timeToX (placement.projection.timelineEndSeconds());
         if (x2 < pianoKeyWidth || x1 > pianoKeyWidth + getTimelineContentViewportWidth())
             continue;
-
-        const bool isActive = placement.contentKey == editedContentKey;
-        auto colour = placement.displayColour;
 
         g.setColour (colour.withAlpha (isActive ? 0.14f : 0.07f));
         g.fillRect (juce::Rectangle<int> (x1, top, x2 - x1, height));
@@ -860,7 +951,6 @@ void PianoRollView::paintF0Curve (juce::Graphics& g, const TimelineContentPlacem
             continue;
         }
 
-        // F0 覆盖整个源内容，只画落在本区域内容窗口内的帧
         const double contentSeconds = static_cast<double> (editedF0Times[frame]);
         if (contentSeconds < placement.projection.contentStartSeconds
             || contentSeconds >= contentWindowEnd)
@@ -892,7 +982,7 @@ void PianoRollView::paintF0Curve (juce::Graphics& g, const TimelineContentPlacem
 
 void PianoRollView::paintUnsynthesized (juce::Graphics& g, const TimelineContentPlacement& placement)
 {
-    if (! placement.isValid() || ! placement.hasSynthCoverage)
+    if (! placement.isValid())
         return;
 
     const double windowStart = placement.projection.contentStartSeconds;
@@ -900,14 +990,15 @@ void PianoRollView::paintUnsynthesized (juce::Graphics& g, const TimelineContent
     if (windowEnd <= windowStart)
         return;
 
-    const double uncoveredStarts[] = {
+    const double uncoveredStarts[2] = {
         windowStart,
-        juce::jmax (windowStart, placement.synthEndTime)
+        placement.hasSynthCoverage ? juce::jmax (windowStart, placement.synthEndTime) : windowStart
     };
-    const double uncoveredEnds[] = {
-        juce::jmin (windowEnd, placement.synthStartTime),
+    const double uncoveredEnds[2] = {
+        placement.hasSynthCoverage ? juce::jmin (windowEnd, placement.synthStartTime) : windowEnd,
         windowEnd
     };
+    const int uncoveredCount = placement.hasSynthCoverage ? 2 : 1;
 
     const auto mapper = makeViewMapper();
     const int top = rulerHeight;
@@ -920,7 +1011,7 @@ void PianoRollView::paintUnsynthesized (juce::Graphics& g, const TimelineContent
     const auto label = juce::String (u8"尚未合成");
     g.setFont (juce::Font (juce::FontOptions (12.0f)));
 
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < uncoveredCount; ++i)
     {
         const double fileStart = uncoveredStarts[i];
         const double fileEnd = uncoveredEnds[i];
@@ -958,36 +1049,70 @@ void PianoRollView::paintPlayhead (juce::Graphics& g)
 
 void PianoRollView::paintCoordinateReadout (juce::Graphics& g)
 {
+    const int contentBottom = rulerHeight + getTimelineContentViewportHeight();
+    const int chipBottomLimit = contentBottom - coordinateBottomInset;
     if (! mousePosition.has_value() || mousePosition->x < pianoKeyWidth
-        || mousePosition->y < rulerHeight)
+        || mousePosition->y < rulerHeight
+        || mousePosition->y >= chipBottomLimit)
         return;
 
     const auto mapper = makeViewMapper();
-    const double seconds = mapper.xToTime (mousePosition->x);
+    const double seconds = juce::jmax (0.0, mapper.xToTime (mousePosition->x));
     const float midiFloat = mapper.yToMidi (static_cast<float> (mousePosition->y - rulerHeight));
     const int midiRounded = juce::jlimit (0, 127, juce::roundToInt (midiFloat));
     const float freq = mapper.yToFreq (static_cast<float> (mousePosition->y - rulerHeight));
-    const int cents = juce::roundToInt ((midiFloat - static_cast<float> (midiRounded)) * 100.0f);
+    const int cents = juce::jlimit (-99, 99,
+        juce::roundToInt ((midiFloat - static_cast<float> (midiRounded)) * 100.0f));
 
-    juce::String text = juce::String (seconds, 2) + juce::String (u8" 秒  ")
-        + noteNameFor (midiRounded)
-        + (cents >= 0 ? juce::String (u8" +") : juce::String (u8" "))
-        + juce::String (cents) + juce::String (u8" 音分  ")
-        + juce::String (freq, 1) + juce::String (u8" Hz");
+    const int totalHundredths = juce::roundToInt (seconds * 100.0);
+    const int minutes = totalHundredths / 6000;
+    const int remainder = totalHundredths % 6000;
+    const int clockSeconds = remainder / 100;
+    const int hundredths = remainder % 100;
+    const auto timeText = juce::String::formatted ("%02d:%02d.%02d", minutes, clockSeconds, hundredths);
 
-    g.setFont (juce::Font (juce::FontOptions (12.0f)));
-    const int textWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), text) + 12;
-    const int contentRight = pianoKeyWidth + getTimelineContentViewportWidth();
-    const int contentBottom = rulerHeight + getTimelineContentViewportHeight();
+    const auto centsText = (cents >= 0 ? juce::String ("+") : juce::String ("-"))
+        + juce::String (std::abs (cents)).paddedLeft ('0', 2);
+    const auto freqText = juce::String (freq, 1);
 
-    auto area = juce::Rectangle<int> (contentRight - textWidth - 6, contentBottom - 24,
-                                      textWidth, 18);
+    auto area = coordinateChipBounds();
+
     g.setColour (UIColors::pink100);
     g.fillRoundedRectangle (area.toFloat(), UIColors::controlCornerRadius);
     g.setColour (UIColors::pink200);
     g.drawRoundedRectangle (area.toFloat(), UIColors::controlCornerRadius, 1.0f);
-    g.setColour (UIColors::ink900);
-    g.drawText (text, area, juce::Justification::centred, false);
+
+    const int columns[] = { 64, 48, 58, 78 };
+    const juce::String values[] = { timeText, noteNameFor (midiRounded), centsText, freqText };
+    const juce::String units[] = {
+        juce::String (u8"秒"), {}, juce::String (u8"音分"), juce::String (u8"Hz")
+    };
+
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    int x = area.getX();
+    for (int i = 0; i < 4; ++i)
+    {
+        auto cell = juce::Rectangle<int> (x, area.getY(), columns[i], area.getHeight());
+        if (i > 0)
+        {
+            g.setColour (UIColors::pink200);
+            g.drawVerticalLine (x, static_cast<float> (area.getY() + 3),
+                                static_cast<float> (area.getBottom() - 3));
+        }
+
+        auto inner = cell.reduced (4, 0);
+        if (units[i].isNotEmpty())
+        {
+            g.setColour (UIColors::ink600);
+            const int unitWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), units[i]);
+            g.drawText (units[i], inner.removeFromRight (unitWidth),
+                        juce::Justification::centredRight, false);
+            inner.removeFromRight (3);
+        }
+        g.setColour (UIColors::ink900);
+        g.drawText (values[i], inner, juce::Justification::centredRight, false);
+        x += columns[i];
+    }
 }
 
 } // namespace deepsvc

@@ -44,8 +44,8 @@ void dumpDebugWav (const juce::String& name, const float* data, size_t numSample
     writer->writeFromFloatArrays (channels, 1, static_cast<int> (numSamples));
 }
 
-std::vector<float> extractFileRangePcm (const juce::AudioBuffer<float>& sourceAudio,
-                                        const FileRange& range)
+std::vector<float> extractWorkingRangePcm (const juce::AudioBuffer<float>& sourceAudio,
+                                          const WorkingRange& range)
 {
     const auto totalSamples = static_cast<int64_t> (sourceAudio.getNumSamples());
     if (totalSamples <= 0 || ! range.isValid())
@@ -67,6 +67,14 @@ std::vector<float> extractFileRangePcm (const juce::AudioBuffer<float>& sourceAu
     return pcm;
 }
 
+std::vector<float> f0TimesForWorkingRange (double startSeconds, size_t frameCount)
+{
+    std::vector<float> times (frameCount);
+    for (size_t i = 0; i < frameCount; ++i)
+        times[i] = static_cast<float> (startSeconds + static_cast<double> (i) * 0.01);
+    return times;
+}
+
 juce::String ptrHex (const void* p)
 {
     if (p == nullptr)
@@ -83,11 +91,11 @@ juce::String pidOf (const Object* object)
     return id.isNotEmpty() ? id : juce::String ("-");
 }
 
-juce::String seqNameOf (const juce::ARARegionSequence* seq)
+juce::String regionSequenceNameOf (const juce::ARARegionSequence* regionSequence)
 {
-    if (seq == nullptr)
+    if (regionSequence == nullptr)
         return "-";
-    const juce::String name (seq->getName());
+    const juce::String name (regionSequence->getName());
     return name.isNotEmpty() ? name : juce::String ("-");
 }
 
@@ -96,43 +104,43 @@ juce::String describeRegion (const juce::ARAPlaybackRegion* region)
     if (region == nullptr)
         return "region p=null";
 
-    const auto* mod = region->getAudioModification();
-    const auto* seq = region->getRegionSequence();
+    const auto* audioModification = region->getAudioModification();
+    const auto* regionSequence = region->getRegionSequence();
 
     return "region p=" + ptrHex (region)
-         + " mod=" + ptrHex (mod)
-         + " modPid=" + pidOf (mod)
-         + " seq=" + ptrHex (seq)
-         + " seqName=" + seqNameOf (seq)
+         + " mod=" + ptrHex (audioModification)
+         + " modPid=" + pidOf (audioModification)
+         + " seq=" + ptrHex (regionSequence)
+         + " seqName=" + regionSequenceNameOf (regionSequence)
          + " win=" + juce::String (region->getStartInAudioModificationTime(), 6)
          + "+" + juce::String (region->getDurationInAudioModificationTime(), 6)
          + " place=" + juce::String (region->getStartInPlaybackTime(), 6)
          + "+" + juce::String (region->getDurationInPlaybackTime(), 6);
 }
 
-juce::String describeMod (const juce::ARAAudioModification* mod)
+juce::String describeAudioModification (const juce::ARAAudioModification* audioModification)
 {
-    if (mod == nullptr)
+    if (audioModification == nullptr)
         return "mod p=null";
 
-    const auto* src = mod->getAudioSource();
-    const auto& regions = mod->getPlaybackRegions();
-    return "mod p=" + ptrHex (mod)
-         + " pid=" + pidOf (mod)
-         + " src=" + ptrHex (src)
-         + " srcPid=" + pidOf (src)
-         + " deactivated=" + juce::String (mod->isDeactivatedForUndoHistory() ? 1 : 0)
+    const auto* audioSource = audioModification->getAudioSource();
+    const auto& regions = audioModification->getPlaybackRegions();
+    return "mod p=" + ptrHex (audioModification)
+         + " pid=" + pidOf (audioModification)
+         + " src=" + ptrHex (audioSource)
+         + " srcPid=" + pidOf (audioSource)
+         + " deactivated=" + juce::String (audioModification->isDeactivatedForUndoHistory() ? 1 : 0)
          + " regions=" + juce::String (static_cast<int> (regions.size()));
 }
 
-juce::String eventSummary (const EventAudioModification* event)
+juce::String modificationSummary (const DeepSvcAudioModification* modification)
 {
-    if (event == nullptr)
-        return "event=miss";
+    if (modification == nullptr)
+        return "modification=miss";
 
     int rendered = 0;
     int pitched = 0;
-    for (const auto& slot : event->slots)
+    for (const auto& slot : modification->slots)
     {
         if (slot.hasSynthAudio())
             ++rendered;
@@ -140,8 +148,8 @@ juce::String eventSummary (const EventAudioModification* event)
             ++pitched;
     }
 
-    return "event pid=" + pidOf (event)
-         + " rev=" + juce::String (static_cast<juce::int64> (event->dataRevision))
+    return "modification pid=" + pidOf (modification)
+         + " rev=" + juce::String (static_cast<juce::int64> (modification->dataRevision))
          + " pitchedSlots=" + juce::String (pitched)
          + " renderedSlots=" + juce::String (rendered);
 }
@@ -226,168 +234,168 @@ void DeepSvcDocumentController::unregisterPlaybackRenderer (DeepSvcPlaybackRende
                              playbackRenderers.end());
 }
 
-EventAudioModification* DeepSvcDocumentController::asEvent (juce::ARAAudioModification* audioModification) const
+DeepSvcAudioModification* DeepSvcDocumentController::asModification (juce::ARAAudioModification* audioModification) const
 {
-    return dynamic_cast<EventAudioModification*> (audioModification);
+    return dynamic_cast<DeepSvcAudioModification*> (audioModification);
 }
 
-const EventAudioModification* DeepSvcDocumentController::asEvent (
+const DeepSvcAudioModification* DeepSvcDocumentController::asModification (
     const juce::ARAAudioModification* audioModification) const
 {
-    return dynamic_cast<const EventAudioModification*> (audioModification);
+    return dynamic_cast<const DeepSvcAudioModification*> (audioModification);
 }
 
-void DeepSvcDocumentController::forEachEvent (const std::function<void (EventAudioModification&)>& fn)
+void DeepSvcDocumentController::forEachModification (const std::function<void (DeepSvcAudioModification&)>& fn)
 {
     auto* document = getDocument();
     if (document == nullptr)
         return;
     for (auto* source : document->getAudioSources())
-        for (auto* modification : source->getAudioModifications<EventAudioModification>())
+        for (auto* modification : source->getAudioModifications<DeepSvcAudioModification>())
             if (modification != nullptr)
                 fn (*modification);
 }
 
-void DeepSvcDocumentController::forEachEvent (const std::function<void (const EventAudioModification&)>& fn) const
+void DeepSvcDocumentController::forEachModification (const std::function<void (const DeepSvcAudioModification&)>& fn) const
 {
-    const_cast<DeepSvcDocumentController*> (this)->forEachEvent (
-        [&] (EventAudioModification& event) { fn (event); });
+    const_cast<DeepSvcDocumentController*> (this)->forEachModification (
+        [&] (DeepSvcAudioModification& modification) { fn (modification); });
 }
 
-EventAudioModification* DeepSvcDocumentController::findEvent (ContentKey key)
+DeepSvcAudioModification* DeepSvcDocumentController::findModification (ContentKey key)
 {
-    EventAudioModification* found = nullptr;
-    forEachEvent ([&] (EventAudioModification& event)
+    DeepSvcAudioModification* found = nullptr;
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (event.contentKey == key)
-            found = &event;
+        if (modification.contentKey == key)
+            found = &modification;
     });
     return found;
 }
 
-const EventAudioModification* DeepSvcDocumentController::findEvent (ContentKey key) const
+const DeepSvcAudioModification* DeepSvcDocumentController::findModification (ContentKey key) const
 {
-    const EventAudioModification* found = nullptr;
-    forEachEvent ([&] (const EventAudioModification& event)
+    const DeepSvcAudioModification* found = nullptr;
+    forEachModification ([&] (const DeepSvcAudioModification& modification)
     {
-        if (event.contentKey == key)
-            found = &event;
+        if (modification.contentKey == key)
+            found = &modification;
     });
     return found;
 }
 
-EventAudioModification* DeepSvcDocumentController::findEventByPersistentId (const juce::String& persistentId)
+DeepSvcAudioModification* DeepSvcDocumentController::findModificationByPersistentId (const juce::String& persistentId)
 {
     if (persistentId.isEmpty())
         return nullptr;
-    EventAudioModification* found = nullptr;
-    forEachEvent ([&] (EventAudioModification& event)
+    DeepSvcAudioModification* found = nullptr;
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (pidOf (&event) == persistentId)
-            found = &event;
+        if (pidOf (&modification) == persistentId)
+            found = &modification;
     });
     return found;
 }
 
-const EventAudioModification* DeepSvcDocumentController::findEventByPersistentId (const juce::String& persistentId) const
+const DeepSvcAudioModification* DeepSvcDocumentController::findModificationByPersistentId (const juce::String& persistentId) const
 {
     if (persistentId.isEmpty())
         return nullptr;
-    const EventAudioModification* found = nullptr;
-    forEachEvent ([&] (const EventAudioModification& event)
+    const DeepSvcAudioModification* found = nullptr;
+    forEachModification ([&] (const DeepSvcAudioModification& modification)
     {
-        if (pidOf (&event) == persistentId)
-            found = &event;
+        if (pidOf (&modification) == persistentId)
+            found = &modification;
     });
     return found;
 }
 
 uint64_t DeepSvcDocumentController::readContentRevision (ContentKey key) const
 {
-    const auto* event = findEvent (key);
-    return event != nullptr ? event->dataRevision : 0;
+    const auto* modification = findModification (key);
+    return modification != nullptr ? modification->dataRevision : 0;
 }
 
 int DeepSvcDocumentController::readActiveSlot (ContentKey key) const
 {
-    const auto* event = findEvent (key);
-    return event != nullptr ? event->activeSlot : 0;
+    const auto* modification = findModification (key);
+    return modification != nullptr ? modification->activeSlot : 0;
 }
 
 std::shared_ptr<const juce::AudioBuffer<float>>
 DeepSvcDocumentController::readSourceAudio (ContentKey key)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return nullptr;
-    return ensureSourceAudio (*event);
+    return ensureSourceAudio (*modification);
 }
 
 void DeepSvcDocumentController::setActiveSlot (ContentKey key, int slot)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
     slot = juce::jlimit (0, 1, slot);
-    if (event->activeSlot == slot)
+    if (modification->activeSlot == slot)
         return;
 
-    event->activeSlot = slot;
-    ++event->dataRevision;
-    notifyPersistedStateChanged (*event);
+    modification->activeSlot = slot;
+    ++modification->dataRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
 void DeepSvcDocumentController::setSlotBypass (ContentKey key, int slot, bool bypass)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
-    auto& slotContent = event->slotAt (slot);
+    auto& slotContent = modification->slotAt (slot);
     if (slotContent.bypass == bypass)
         return;
 
     slotContent.bypass = bypass;
-    ++event->dataRevision;
-    notifyPersistedStateChanged (*event);
+    ++modification->dataRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
 void DeepSvcDocumentController::applyTimbreFile (ContentKey key, int slot, const juce::String& timbreFile)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
-    event->slotAt (slot).timbreFile = timbreFile;
-    notifyPersistedStateChanged (*event);
+    modification->slotAt (slot).timbreFile = timbreFile;
+    notifyPersistedStateChanged (*modification);
 }
 
 void DeepSvcDocumentController::applySlotParams (ContentKey key, int slot, const EngineSynthParams& params)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
-    event->slotAt (slot).params = params;
-    notifyPersistedStateChanged (*event);
+    modification->slotAt (slot).params = params;
+    notifyPersistedStateChanged (*modification);
 }
 
 void DeepSvcDocumentController::applyF0 (ContentKey key, int slot,
                                          std::vector<float> times, std::vector<float> values)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
     PitchData pitch;
     pitch.f0Times = std::move (times);
     pitch.f0Values = std::move (values);
-    event->slotAt (slot).pitchData = std::move (pitch);
-    ++event->dataRevision;
-    notifyPersistedStateChanged (*event);
+    modification->slotAt (slot).pitchData = std::move (pitch);
+    ++modification->dataRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
@@ -397,22 +405,45 @@ void DeepSvcDocumentController::applyRenderedAudio (ContentKey key,
                                                     double synthStartTime,
                                                     double synthEndTime,
                                                     const EngineSynthParams& synthParams,
-                                                    const juce::String& synthTimbreFile)
+                                                    const juce::String& synthTimbreFile,
+                                                    double elapsedSeconds)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
     SynthAudio synth;
     synth.samples = std::move (samples);
     synth.synthStartTime = synthStartTime;
     synth.synthEndTime = synthEndTime;
-    auto& slotContent = event->slotAt (slot);
+    auto& slotContent = modification->slotAt (slot);
     slotContent.synthAudio = std::move (synth);
     slotContent.synthParams = synthParams;
     slotContent.synthTimbreFile = synthTimbreFile;
-    ++event->dataRevision;
-    notifyPersistedStateChanged (*event);
+    if (elapsedSeconds >= 0.0)
+        slotContent.lastSynthElapsedSeconds = elapsedSeconds;
+    ++modification->dataRevision;
+    notifyPersistedStateChanged (*modification);
+    refreshRegisteredRenderers (publishModelChange());
+}
+
+void DeepSvcDocumentController::clearSynthAudio (ContentKey key, int slot)
+{
+    auto* modification = findModification (key);
+    if (modification == nullptr)
+        return;
+
+    auto& slotContent = modification->slotAt (slot);
+    if (! slotContent.hasSynthAudio() && ! slotContent.lastSynthElapsedSeconds.has_value())
+        return;
+
+    slotContent.synthAudio.reset();
+    slotContent.synthParams = {};
+    slotContent.synthTimbreFile = {};
+    slotContent.lastSynthElapsedSeconds.reset();
+    slotContent.bypass = false;
+    ++modification->dataRevision;
+    notifyPersistedStateChanged (*modification);
     refreshRegisteredRenderers (publishModelChange());
 }
 
@@ -420,22 +451,26 @@ void DeepSvcDocumentController::requestDetect (ContentKey key,
                                                int slot,
                                                EngineEstimator estimator)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
-    const auto range = event->windowUnion();
-    const auto audio = ensureSourceAudio (*event);
+    const auto range = modification->workingRange();
+    const auto audio = ensureSourceAudio (*modification);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
-    auto pcm = extractFileRangePcm (*audio, range);
+    auto pcm = extractWorkingRangePcm (*audio, range);
     if (pcm.empty())
         return;
 
     slot = juce::jlimit (0, 1, slot);
-    const JobKey jobKey { juce::String (event->getPersistentID()), slot };
+    const JobKey jobKey { juce::String (modification->getPersistentID()), slot };
     pendingDetectRanges[jobKey] = range;
+    debugLog ("requestDetect slot=" + juce::String (slot)
+              + " rangeStart=" + juce::String (range.startSeconds, 3)
+              + " rangeEnd=" + juce::String (range.endSeconds, 3)
+              + " samples=" + juce::String (static_cast<int64_t> (pcm.size())));
     jobManager.submitDetect (jobKey, std::move (pcm),
                              static_cast<uint32_t> (TimeCoordinate::kRenderSampleRate),
                              estimator);
@@ -446,29 +481,29 @@ void DeepSvcDocumentController::requestSynth (ContentKey key,
                                               const juce::String& timbreAbsolutePath,
                                               const EngineSynthParams& params)
 {
-    auto* event = findEvent (key);
-    if (event == nullptr)
+    auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
 
-    const auto range = event->windowUnion();
-    const auto audio = ensureSourceAudio (*event);
+    const auto range = modification->workingRange();
+    const auto audio = ensureSourceAudio (*modification);
     if (audio == nullptr || audio->getNumSamples() == 0)
         return;
 
-    auto pcm = extractFileRangePcm (*audio, range);
+    auto pcm = extractWorkingRangePcm (*audio, range);
     if (pcm.empty())
         return;
 
     slot = juce::jlimit (0, 1, slot);
-    const JobKey jobKey { juce::String (event->getPersistentID()), slot };
+    const JobKey jobKey { juce::String (modification->getPersistentID()), slot };
     pendingSynthParams[jobKey] = params;
-    pendingSynthTimbres[jobKey] = event->slotAt (slot).timbreFile;
+    pendingSynthTimbres[jobKey] = modification->slotAt (slot).timbreFile;
     pendingSynthRanges[jobKey] = range;
 
     dumpDebugWav ("synth_input", pcm.data(), pcm.size());
     debugLog ("requestSynth slot=" + juce::String (slot)
-              + " winStart=" + juce::String (range.startSeconds, 3)
-              + " winEnd=" + juce::String (range.endSeconds, 3)
+              + " rangeStart=" + juce::String (range.startSeconds, 3)
+              + " rangeEnd=" + juce::String (range.endSeconds, 3)
               + " samples=" + juce::String (static_cast<int64_t> (pcm.size()))
               + " estimator=" + juce::String (static_cast<uint32_t> (params.f0Estimator))
               + " steps=" + juce::String (params.diffusionSteps)
@@ -486,27 +521,27 @@ void DeepSvcDocumentController::requestSynth (ContentKey key,
 
 void DeepSvcDocumentController::cancelJobs (ContentKey key, int slot)
 {
-    const auto* event = findEvent (key);
-    if (event == nullptr)
+    const auto* modification = findModification (key);
+    if (modification == nullptr)
         return;
-    jobManager.cancelJobsFor ({ juce::String (event->getPersistentID()), juce::jlimit (0, 1, slot) });
+    jobManager.cancelJobsFor ({ juce::String (modification->getPersistentID()), juce::jlimit (0, 1, slot) });
 }
 
 JobStatus DeepSvcDocumentController::jobStatusFor (ContentKey key, int slot) const
 {
-    const auto* event = findEvent (key);
-    if (event == nullptr)
+    const auto* modification = findModification (key);
+    if (modification == nullptr)
         return {};
-    return jobManager.statusFor ({ juce::String (event->getPersistentID()), juce::jlimit (0, 1, slot) });
+    return jobManager.statusFor ({ juce::String (modification->getPersistentID()), juce::jlimit (0, 1, slot) });
 }
 
 std::shared_ptr<const juce::AudioBuffer<float>>
-DeepSvcDocumentController::ensureSourceAudio (EventAudioModification& event)
+DeepSvcDocumentController::ensureSourceAudio (DeepSvcAudioModification& modification)
 {
-    if (event.sourceAudio != nullptr)
-        return event.sourceAudio;
+    if (modification.sourceAudio != nullptr)
+        return modification.sourceAudio;
 
-    auto* audioSource = event.getAudioSource();
+    auto* audioSource = modification.getAudioSource();
     if (audioSource == nullptr)
         return nullptr;
 
@@ -552,26 +587,26 @@ DeepSvcDocumentController::ensureSourceAudio (EventAudioModification& event)
             out[i] += data[i] * scale;
     }
 
-    event.sourceAudio = mono;
-    ++event.dataRevision;
+    modification.sourceAudio = mono;
+    ++modification.dataRevision;
     return mono;
 }
 
 void DeepSvcDocumentController::dumpAraGraph (const juce::String& reason)
 {
     auto* document = getDocument();
-    int eventCount = 0;
+    int modificationCount = 0;
     int regionCount = 0;
     if (document != nullptr)
         for (auto* source : document->getAudioSources())
-            for (auto* mod : source->getAudioModifications())
+            for (auto* audioModification : source->getAudioModifications())
             {
-                ++eventCount;
-                regionCount += static_cast<int> (mod->getPlaybackRegions().size());
+                ++modificationCount;
+                regionCount += static_cast<int> (audioModification->getPlaybackRegions().size());
             }
 
     debugLog ("ara dump begin reason=" + reason
-              + " events=" + juce::String (eventCount)
+              + " mods=" + juce::String (modificationCount)
               + " regions=" + juce::String (regionCount));
 
     if (document == nullptr)
@@ -580,29 +615,30 @@ void DeepSvcDocumentController::dumpAraGraph (const juce::String& reason)
         return;
     }
 
-    int hostMods = 0;
-    int hostRegions = 0;
+    int hostModificationCount = 0;
+    int hostRegionCount = 0;
     for (auto* source : document->getAudioSources())
     {
-        const auto& mods = source->getAudioModifications();
+        const auto& audioModifications = source->getAudioModifications();
         debugLog ("ara dump src p=" + ptrHex (source)
                   + " pid=" + pidOf (source)
                   + " deactivated=" + juce::String (source->isDeactivatedForUndoHistory() ? 1 : 0)
-                  + " mods=" + juce::String (static_cast<int> (mods.size())));
-        for (auto* mod : mods)
+                  + " mods=" + juce::String (static_cast<int> (audioModifications.size())));
+        for (auto* audioModification : audioModifications)
         {
-            ++hostMods;
-            debugLog ("ara dump   " + describeMod (mod) + " " + eventSummary (asEvent (mod)));
-            for (auto* region : mod->getPlaybackRegions())
+            ++hostModificationCount;
+            debugLog ("ara dump   " + describeAudioModification (audioModification)
+                      + " " + modificationSummary (asModification (audioModification)));
+            for (auto* region : audioModification->getPlaybackRegions())
             {
-                ++hostRegions;
+                ++hostRegionCount;
                 debugLog ("ara dump     " + describeRegion (region));
             }
         }
     }
 
-    debugLog ("ara dump end hostMods=" + juce::String (hostMods)
-              + " hostRegions=" + juce::String (hostRegions));
+    debugLog ("ara dump end hostMods=" + juce::String (hostModificationCount)
+              + " hostRegions=" + juce::String (hostRegionCount));
 }
 
 void DeepSvcDocumentController::willBeginEditing (juce::ARADocument* document)
@@ -616,10 +652,10 @@ void DeepSvcDocumentController::didUpdateAudioSourceProperties (juce::ARAAudioSo
 {
     debugLog ("ara didUpdateAudioSourceProperties p=" + ptrHex (audioSource)
               + " pid=" + pidOf (audioSource));
-    forEachEvent ([&] (EventAudioModification& event)
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (event.getAudioSource() == audioSource)
-            event.sourceAudio.reset();
+        if (modification.getAudioSource() == audioSource)
+            modification.sourceAudio.reset();
     });
 }
 
@@ -632,17 +668,17 @@ void DeepSvcDocumentController::doUpdateAudioSourceContent (juce::ARAAudioSource
     if (! scopeFlags.affectSamples())
         return;
 
-    forEachEvent ([&] (EventAudioModification& event)
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (event.getAudioSource() != audioSource)
+        if (modification.getAudioSource() != audioSource)
             return;
-        event.sourceAudio.reset();
-        for (auto& slot : event.slots)
+        modification.sourceAudio.reset();
+        for (auto& slot : modification.slots)
         {
             slot.synthAudio.reset();
             slot.pitchData.reset();
         }
-        ++event.dataRevision;
+        ++modification.dataRevision;
     });
 
     refreshRegisteredRenderers (publishModelChange());
@@ -660,8 +696,8 @@ void DeepSvcDocumentController::didAddAudioModificationToAudioSource (
 {
     debugLog ("ara didAddAudioModificationToAudioSource src=" + ptrHex (audioSource)
               + " srcPid=" + pidOf (audioSource)
-              + " " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
+              + " " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
 }
 
 void DeepSvcDocumentController::willRemoveAudioModificationFromAudioSource (
@@ -670,8 +706,8 @@ void DeepSvcDocumentController::willRemoveAudioModificationFromAudioSource (
 {
     debugLog ("ara willRemoveAudioModificationFromAudioSource src=" + ptrHex (audioSource)
               + " srcPid=" + pidOf (audioSource)
-              + " " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
+              + " " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
 }
 
 void DeepSvcDocumentController::willUpdateAudioModificationProperties (
@@ -682,7 +718,7 @@ void DeepSvcDocumentController::willUpdateAudioModificationProperties (
     if (newProperties != nullptr && newProperties->persistentID != nullptr
         && newProperties->persistentID[0] != 0)
         newPid = juce::String (newProperties->persistentID);
-    debugLog ("ara willUpdateAudioModificationProperties " + describeMod (audioModification)
+    debugLog ("ara willUpdateAudioModificationProperties " + describeAudioModification (audioModification)
               + " newPid=" + newPid);
 }
 
@@ -691,8 +727,8 @@ void DeepSvcDocumentController::willDeactivateAudioModificationForUndoHistory (
     bool deactivate)
 {
     debugLog ("ara willDeactivateAudioModificationForUndoHistory deactivate="
-              + juce::String (deactivate ? 1 : 0) + " " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
+              + juce::String (deactivate ? 1 : 0) + " " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
 }
 
 void DeepSvcDocumentController::didDeactivateAudioModificationForUndoHistory (
@@ -700,23 +736,23 @@ void DeepSvcDocumentController::didDeactivateAudioModificationForUndoHistory (
     bool deactivate)
 {
     debugLog ("ara didDeactivateAudioModificationForUndoHistory deactivate="
-              + juce::String (deactivate ? 1 : 0) + " " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
+              + juce::String (deactivate ? 1 : 0) + " " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
 }
 
 void DeepSvcDocumentController::didUpdateAudioModificationProperties (juce::ARAAudioModification* audioModification)
 {
-    debugLog ("ara didUpdateAudioModificationProperties " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
-    if (auto* event = asEvent (audioModification))
-        event->bindContentKey();
+    debugLog ("ara didUpdateAudioModificationProperties " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
+    if (auto* modification = asModification (audioModification))
+        modification->bindContentKey();
     refreshRegisteredRenderers (publishModelChange());
 }
 
 void DeepSvcDocumentController::willDestroyAudioModification (juce::ARAAudioModification* audioModification)
 {
-    debugLog ("ara willDestroyAudioModification " + describeMod (audioModification)
-              + " " + eventSummary (asEvent (audioModification)));
+    debugLog ("ara willDestroyAudioModification " + describeAudioModification (audioModification)
+              + " " + modificationSummary (asModification (audioModification)));
     const auto persistentId = pidOf (audioModification);
     if (persistentId != "-")
         for (int slot = 0; slot < 2; ++slot)
@@ -736,7 +772,7 @@ void DeepSvcDocumentController::didAddPlaybackRegionToAudioModification (
     juce::ARAAudioModification* audioModification,
     juce::ARAPlaybackRegion* playbackRegion)
 {
-    debugLog ("ara didAddPlaybackRegionToAudioModification " + describeMod (audioModification)
+    debugLog ("ara didAddPlaybackRegionToAudioModification " + describeAudioModification (audioModification)
               + " " + describeRegion (playbackRegion));
     refreshRegisteredRenderers (publishModelChange());
 }
@@ -747,10 +783,10 @@ void DeepSvcDocumentController::didEndEditing (juce::ARADocument* document)
     debugLog ("ara didEndEditing");
     dumpAraGraph ("didEndEditing");
 
-    forEachEvent ([&] (EventAudioModification& event)
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (event.windowUnion().isValid())
-            ensureSourceAudio (event);
+        if (modification.workingRange().isValid())
+            ensureSourceAudio (modification);
     });
 
     refreshRegisteredRenderers (publishModelChange());
@@ -762,19 +798,19 @@ void DeepSvcDocumentController::didEnableAudioSourceSamplesAccess (juce::ARAAudi
     if (! enable)
         return;
 
-    forEachEvent ([&] (EventAudioModification& event)
+    forEachModification ([&] (DeepSvcAudioModification& modification)
     {
-        if (event.getAudioSource() != audioSource)
+        if (modification.getAudioSource() != audioSource)
             return;
-        if (event.windowUnion().isValid())
-            ensureSourceAudio (event);
+        if (modification.workingRange().isValid())
+            ensureSourceAudio (modification);
     });
 }
 
 void DeepSvcDocumentController::didUpdateRegionSequenceProperties (juce::ARARegionSequence* regionSequence)
 {
     debugLog ("ara didUpdateRegionSequenceProperties seq=" + ptrHex (regionSequence)
-              + " seqName=" + seqNameOf (regionSequence));
+              + " seqName=" + regionSequenceNameOf (regionSequence));
     refreshRegisteredRenderers (publishModelChange());
 }
 
@@ -783,7 +819,7 @@ void DeepSvcDocumentController::didAddPlaybackRegionToRegionSequence (
     juce::ARAPlaybackRegion* playbackRegion)
 {
     debugLog ("ara didAddPlaybackRegionToRegionSequence seq=" + ptrHex (regionSequence)
-              + " seqName=" + seqNameOf (regionSequence)
+              + " seqName=" + regionSequenceNameOf (regionSequence)
               + " " + describeRegion (playbackRegion));
 }
 
@@ -792,7 +828,7 @@ void DeepSvcDocumentController::willRemovePlaybackRegionFromRegionSequence (
     juce::ARAPlaybackRegion* playbackRegion)
 {
     debugLog ("ara willRemovePlaybackRegionFromRegionSequence seq=" + ptrHex (regionSequence)
-              + " seqName=" + seqNameOf (regionSequence)
+              + " seqName=" + regionSequenceNameOf (regionSequence)
               + " " + describeRegion (playbackRegion));
 }
 
@@ -822,7 +858,7 @@ void DeepSvcDocumentController::willRemovePlaybackRegionFromAudioModification (
     juce::ARAAudioModification* audioModification,
     juce::ARAPlaybackRegion* playbackRegion)
 {
-    debugLog ("ara willRemovePlaybackRegionFromAudioModification " + describeMod (audioModification)
+    debugLog ("ara willRemovePlaybackRegionFromAudioModification " + describeAudioModification (audioModification)
               + " " + describeRegion (playbackRegion));
 }
 
@@ -837,7 +873,7 @@ namespace
 {
 
 constexpr int kArchiveMagic = 0x44535643;
-constexpr int kArchiveVersion = 2;
+constexpr int kArchiveVersion = 4;
 constexpr int kMaxArchiveRecords = 65536;
 
 } // namespace
@@ -845,44 +881,44 @@ constexpr int kMaxArchiveRecords = 65536;
 bool DeepSvcDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& output,
                                                         const juce::ARAStoreObjectsFilter* filter)
 {
-    std::vector<EventAudioModification*> events;
+    std::vector<DeepSvcAudioModification*> modifications;
 
     if (filter == nullptr)
     {
-        forEachEvent ([&] (EventAudioModification& event)
+        forEachModification ([&] (DeepSvcAudioModification& modification)
         {
-            if (pidOf (&event) != "-")
-                events.push_back (&event);
+            if (pidOf (&modification) != "-")
+                modifications.push_back (&modification);
         });
     }
     else
     {
         const auto& modsToStore = filter->getAudioModificationsToStore();
-        forEachEvent ([&] (EventAudioModification& event)
+        forEachModification ([&] (DeepSvcAudioModification& modification)
         {
-            const auto* basePtr = static_cast<const ARA::PlugIn::AudioModification*> (&event);
+            const auto* basePtr = static_cast<const ARA::PlugIn::AudioModification*> (&modification);
             if (std::find (modsToStore.begin(), modsToStore.end(), basePtr) != modsToStore.end())
-                events.push_back (&event);
+                modifications.push_back (&modification);
         });
     }
 
-    if (events.size() > static_cast<size_t> (kMaxArchiveRecords))
+    if (modifications.size() > static_cast<size_t> (kMaxArchiveRecords))
         return false;
 
     juce::String stored;
-    for (const auto* event : events)
-        stored += pidOf (event) + ",";
-    debugLog ("ara doStoreObjects count=" + juce::String (static_cast<int> (events.size()))
+    for (const auto* modification : modifications)
+        stored += pidOf (modification) + ",";
+    debugLog ("ara doStoreObjects count=" + juce::String (static_cast<int> (modifications.size()))
               + " pids=[" + stored + "]");
 
     bool ok = output.writeInt (kArchiveMagic);
     ok = output.writeInt (kArchiveVersion) && ok;
-    ok = output.writeInt (static_cast<int> (events.size())) && ok;
+    ok = output.writeInt (static_cast<int> (modifications.size())) && ok;
 
-    for (const auto* event : events)
+    for (const auto* modification : modifications)
     {
-        ok = output.writeString (juce::String (event->getPersistentID())) && ok;
-        ok = output.writeString (juce::JSON::toString (archive::eventToJson (*event))) && ok;
+        ok = output.writeString (juce::String (modification->getPersistentID())) && ok;
+        ok = output.writeString (juce::JSON::toString (archive::modificationToJson (*modification))) && ok;
     }
 
     return ok;
@@ -908,25 +944,25 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
         debugLog ("ara doRestore record archivedPid=" + archivedPersistentId
                   + " jsonBytes=" + juce::String (jsonText.length()));
 
-        EventAudioModification* event = nullptr;
+        DeepSvcAudioModification* modification = nullptr;
         if (filter != nullptr)
-            event = filter->getAudioModificationToRestoreStateWithID<EventAudioModification> (
+            modification = filter->getAudioModificationToRestoreStateWithID<DeepSvcAudioModification> (
                 archivedPersistentId.toRawUTF8());
         else
-            event = findEventByPersistentId (archivedPersistentId);
+            modification = findModificationByPersistentId (archivedPersistentId);
 
-        if (event == nullptr)
+        if (modification == nullptr)
         {
             debugLog ("ara doRestore skip noHostMap archivedPid=" + archivedPersistentId);
             continue;
         }
 
         const auto json = juce::JSON::parse (jsonText);
-        archive::eventFromJson (*event, json);
-        event->bindContentKey();
-        debugLog ("ara doRestore applied restoredPid=" + pidOf (event)
-                  + " rev=" + juce::String (static_cast<juce::int64> (event->dataRevision)));
-        notifyPersistedStateChanged (*event);
+        archive::modificationFromJson (*modification, json);
+        modification->bindContentKey();
+        debugLog ("ara doRestore applied restoredPid=" + pidOf (modification)
+                  + " rev=" + juce::String (static_cast<juce::int64> (modification->dataRevision)));
+        notifyPersistedStateChanged (*modification);
     }
 
     refreshRegisteredRenderers (publishModelChange());
@@ -947,41 +983,40 @@ void DeepSvcDocumentController::jobStatusChanged (JobKey key, const JobStatus& s
 void DeepSvcDocumentController::detectFinished (JobKey key, std::vector<float> f0)
 {
     const auto rangeIt = pendingDetectRanges.find (key);
-    const double start = rangeIt != pendingDetectRanges.end() ? rangeIt->second.startSeconds : 0.0;
-    if (rangeIt != pendingDetectRanges.end())
-        pendingDetectRanges.erase (rangeIt);
+    if (rangeIt == pendingDetectRanges.end())
+        return;
+    const double start = rangeIt->second.startSeconds;
+    pendingDetectRanges.erase (rangeIt);
 
-    const auto* event = findEventByPersistentId (key.persistentId);
-    if (event == nullptr)
+    const auto* modification = findModificationByPersistentId (key.persistentId);
+    if (modification == nullptr)
         return;
 
-    std::vector<float> times (f0.size());
-    for (size_t i = 0; i < f0.size(); ++i)
-        times[i] = static_cast<float> (start + static_cast<double> (i) * 0.01);
-
-    applyF0 (event->contentKey, key.slot, std::move (times), std::move (f0));
+    applyF0 (modification->contentKey, key.slot,
+             f0TimesForWorkingRange (start, f0.size()), std::move (f0));
 }
 
 void DeepSvcDocumentController::synthFinished (JobKey key,
                                                std::vector<float> audio,
                                                std::vector<float> firstVocoder,
-                                               std::vector<float>)
+                                               std::vector<float> f0,
+                                               double elapsedSeconds)
 {
     debugLog ("synthFinished slot=" + juce::String (key.slot)
               + " audio=" + juce::String (static_cast<int64_t> (audio.size()))
-              + " firstVocoder=" + juce::String (static_cast<int64_t> (firstVocoder.size())));
+              + " firstVocoder=" + juce::String (static_cast<int64_t> (firstVocoder.size()))
+              + " f0=" + juce::String (static_cast<int64_t> (f0.size())));
     dumpDebugWav ("synth_output_final", audio.data(), audio.size());
     if (! firstVocoder.empty())
         dumpDebugWav ("synth_output_first_vocoder", firstVocoder.data(), firstVocoder.size());
 
     auto output = firstVocoder.empty() ? std::move (audio) : std::move (firstVocoder);
 
-    FileRange range;
-    if (const auto it = pendingSynthRanges.find (key); it != pendingSynthRanges.end())
-    {
-        range = it->second;
-        pendingSynthRanges.erase (it);
-    }
+    const auto rangeIt = pendingSynthRanges.find (key);
+    if (rangeIt == pendingSynthRanges.end())
+        return;
+    const WorkingRange range = rangeIt->second;
+    pendingSynthRanges.erase (rangeIt);
 
     EngineSynthParams synthParams;
     juce::String synthTimbre;
@@ -996,16 +1031,16 @@ void DeepSvcDocumentController::synthFinished (JobKey key,
         pendingSynthTimbres.erase (it);
     }
 
-    const auto* event = findEventByPersistentId (key.persistentId);
-    if (event == nullptr)
+    const auto* modification = findModificationByPersistentId (key.persistentId);
+    if (modification == nullptr)
         return;
 
-    const double synthStart = range.startSeconds;
-    const double synthEnd = synthStart
-        + static_cast<double> (output.size()) / TimeCoordinate::kRenderSampleRate;
-    applyRenderedAudio (event->contentKey, key.slot,
+    applyRenderedAudio (modification->contentKey, key.slot,
                         std::make_shared<const std::vector<float>> (std::move (output)),
-                        synthStart, synthEnd, synthParams, synthTimbre);
+                        range.startSeconds, range.endSeconds, synthParams, synthTimbre, elapsedSeconds);
+    if (! f0.empty())
+        applyF0 (modification->contentKey, key.slot,
+                 f0TimesForWorkingRange (range.startSeconds, f0.size()), std::move (f0));
 }
 
 DeepSvcDocumentController::PlaybackRegionProjection
@@ -1024,18 +1059,12 @@ DeepSvcDocumentController::makeProjection (juce::ARAPlaybackRegion* region) cons
     projection.durationInModificationTime = region->getDurationInAudioModificationTime();
     projection.displayColour = colourOf (region);
 
-    if (const auto* event = asEvent (modification))
+    if (const auto* modificationContent = asModification (modification))
     {
-        projection.contentKey = event->contentKey;
-        projection.contentRevision = event->dataRevision;
-        if (const auto* source = event->getAudioSource())
-        {
-            const double rate = source->getSampleRate();
-            if (rate > 0.0)
-                projection.contentDurationSeconds = static_cast<double> (source->getSampleCount()) / rate;
-        }
+        projection.contentKey = modificationContent->contentKey;
+        projection.contentRevision = modificationContent->dataRevision;
 
-        const auto& slot = event->active();
+        const auto& slot = modificationContent->active();
         projection.hasRenderedAudio = slot.hasSynthAudio() && ! slot.bypass;
         if (slot.hasSynthAudio())
         {
@@ -1092,9 +1121,9 @@ void DeepSvcDocumentController::reconcileEditorSelectionPlaybackRegions()
         editorSelectionPlaybackRegions.end());
 }
 
-void DeepSvcDocumentController::notifyPersistedStateChanged (EventAudioModification& event)
+void DeepSvcDocumentController::notifyPersistedStateChanged (DeepSvcAudioModification& modification)
 {
-    event.notifyContentChanged (juce::ARAContentUpdateScopes(), true);
+    modification.notifyContentChanged (juce::ARAContentUpdateScopes(), true);
 }
 
 juce::ARAAudioModification* DeepSvcDocumentController::doCreateAudioModification (
@@ -1102,11 +1131,11 @@ juce::ARAAudioModification* DeepSvcDocumentController::doCreateAudioModification
     ARA::ARAAudioModificationHostRef hostRef,
     const juce::ARAAudioModification* optionalModificationToClone)
 {
-    auto* created = new EventAudioModification (audioSource, hostRef, optionalModificationToClone);
+    auto* created = new DeepSvcAudioModification (audioSource, hostRef, optionalModificationToClone);
     debugLog ("ara doCreateAudioModification created=" + ptrHex (created)
               + " clone=" + ptrHex (optionalModificationToClone)
               + " clonePid=" + pidOf (optionalModificationToClone)
-              + " " + describeMod (optionalModificationToClone)
+              + " " + describeAudioModification (optionalModificationToClone)
               + " src=" + ptrHex (audioSource)
               + " srcPid=" + pidOf (audioSource)
               + " srcModCount=" + juce::String (audioSource != nullptr
@@ -1121,7 +1150,7 @@ juce::ARAPlaybackRegion* DeepSvcDocumentController::doCreatePlaybackRegion (
 {
     auto* created = new juce::ARAPlaybackRegion (modification, hostRef);
     debugLog ("ara doCreatePlaybackRegion created=" + ptrHex (created)
-              + " " + describeMod (modification));
+              + " " + describeAudioModification (modification));
     return created;
 }
 

@@ -18,6 +18,7 @@
     --ink300: #B99AA6;
     --warning: #C98A2D;
     --warning-bg: #F9EEDD;
+    --success: #3E9B6D;
     --key-white: #FFFFFF;
     --key-black: #4A3540;
     --radius: 8px;
@@ -88,9 +89,7 @@
     font-size: 11px;
     font-weight: 700;
   }
-  .list {
-    padding: 4px 8px 10px;
-  }
+  .list { padding: 4px 8px 10px; }
   .row-item {
     padding: 7px 8px;
     border-radius: 6px;
@@ -114,12 +113,11 @@
     flex: 1;
     display: grid;
     grid-template-columns: 52px 1fr;
-    min-height: 420px;
+    min-height: 520px;
   }
   .keys {
     background: var(--key-white);
     border-right: 1px solid var(--pink200);
-    position: relative;
   }
   .key {
     height: 22px;
@@ -142,6 +140,7 @@
   }
   .roll {
     position: relative;
+    cursor: crosshair;
     background:
       repeating-linear-gradient(
         to bottom,
@@ -149,22 +148,18 @@
         transparent 22px 44px
       );
     overflow: hidden;
-  }
-  .lane {
-    position: absolute;
-    left: 0; right: 0;
-    height: 1px;
-    background: var(--pink100);
+    user-select: none;
   }
   .region {
     position: absolute;
     top: 28px;
-    bottom: 88px;
+    bottom: 36px;
     left: 18%;
     width: 38%;
     background: rgba(181, 68, 110, 0.12);
     border: 2px solid var(--pink600);
     border-radius: 2px;
+    pointer-events: none;
   }
   .curve {
     position: absolute;
@@ -176,19 +171,21 @@
     border-bottom: none;
     border-radius: 80px 80px 0 0;
     opacity: 0.9;
+    pointer-events: none;
   }
   .playhead {
     position: absolute;
     top: 0;
-    bottom: 72px;
+    bottom: 0;
     left: 41%;
     width: 1px;
     background: var(--pink900);
+    pointer-events: none;
   }
   .unsynth {
     position: absolute;
     top: 28px;
-    bottom: 88px;
+    bottom: 36px;
     left: 48%;
     width: 8%;
     background: rgba(249, 238, 221, 0.85);
@@ -200,31 +197,18 @@
     font-size: 11px;
     writing-mode: vertical-rl;
     letter-spacing: 0.12em;
+    pointer-events: none;
   }
-  .overview {
-    height: 72px;
-    border-top: 1px solid var(--pink200);
-    background: var(--pink100);
-    padding: 8px 12px 6px 64px;
-  }
-  .overview-bar {
-    height: 44px;
-    border-radius: 4px;
-    background: linear-gradient(to top, var(--pink300), var(--pink200));
-    position: relative;
-  }
-  .overview-window {
+  .hud {
     position: absolute;
-    left: 16%;
-    width: 42%;
-    top: 0; bottom: 0;
-    border: 2px solid var(--pink600);
-    background: rgba(255,255,255,0.18);
+    right: 6px;
+    bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
   }
   .coord {
-    position: absolute;
-    right: 10px;
-    bottom: 84px;
     width: 248px;
     height: 22px;
     display: grid;
@@ -234,6 +218,7 @@
     border-radius: var(--control-radius);
     font-variant-numeric: tabular-nums;
     font-size: 11px;
+    pointer-events: none;
   }
   .coord span {
     display: flex;
@@ -246,13 +231,42 @@
   }
   .coord span:last-child { border-right: none; }
   .coord .unit { color: var(--ink600); margin-left: 3px; }
+  .info {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--pink200);
+    background: var(--pink100);
+    color: var(--ink900);
+    font: italic 13px/20px Georgia, "Times New Roman", serif;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .info:active, .info.held {
+    background: var(--pink600);
+    border-color: var(--pink600);
+    color: #fff;
+  }
   .right {
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+    overflow: hidden;
   }
-  .params, .copy { flex: 1; }
+  .slot-bar {
+    flex: none;
+    height: 40px;
+    flex-direction: row;
+    align-items: center;
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .slot-bar .grow { flex: 1; }
+  .body-panel { flex: 1; }
   .field {
     display: grid;
     grid-template-columns: 78px 1fr;
@@ -284,10 +298,7 @@
     border-radius: 6px;
     font-size: 12px;
   }
-  .ab {
-    display: flex;
-    gap: 0;
-  }
+  .ab { display: flex; gap: 0; }
   .ab button, .btn, .ghost {
     border: 1px solid var(--pink200);
     background: #fff;
@@ -317,12 +328,18 @@
     padding: 0 12px;
     font-weight: 600;
   }
-  .copy-actions {
-    display: flex;
-    gap: 8px;
-    padding: 8px 12px 12px;
-  }
+  .btn:disabled { opacity: 0.45; }
   .ghost { background: var(--pink050); }
+  .ghost.on {
+    background: var(--pink600);
+    border-color: var(--pink600);
+    color: #fff;
+  }
+  .caption {
+    padding: 0 12px 8px;
+    color: var(--ink600);
+    font-size: 11px;
+  }
   .bottom {
     display: flex;
     align-items: center;
@@ -345,7 +362,7 @@
   .process .fill {
     position: absolute;
     inset: 0 auto 0 0;
-    width: 62%;
+    width: 0;
     background: var(--pink300);
   }
   .process .label {
@@ -356,7 +373,7 @@
     align-items: center;
     justify-content: center;
     font-size: 12px;
-    color: var(--pink900);
+    color: var(--ink600);
     font-weight: 600;
   }
   .legend {
@@ -377,17 +394,13 @@
     color: var(--ink900);
     font-weight: 650;
   }
-  .caption {
-    padding: 0 12px 8px;
-    color: var(--ink600);
-    font-size: 11px;
-  }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <div class="page">
   <h1>编辑器界面</h1>
-  <p class="lead">三块状态各管一件事：坐标格管光标位置，过程格管正在进行的任务，当前副本管这个 A/B 槽位里存着什么。</p>
+  <p class="lead">在钢琴卷时间轴上按下左键或拖动，会改写宿主播放头。右边栏顶部的槽位条始终可点：A/B 切换当前副本，旁通与清空作用在这个副本上。下面默认是合成参数；按住钢琴卷右下角、坐标格右边的圆圈 i，换成只读的当前内容，松开后合成参数回来。过程格空闲时写「空闲」；任何任务结束后那个状态再停三秒，然后回到空闲。</p>
 
   <div class="window">
     <div class="body">
@@ -421,39 +434,47 @@
             <div class="key black"></div>
             <div class="key">C3</div>
           </div>
-          <div class="roll">
+          <div class="roll" id="roll">
             <div class="region"></div>
             <div class="curve"></div>
             <div class="unsynth">尚未合成</div>
-            <div class="playhead"></div>
-            <div class="coord" title="四列像素宽度固定，数值在列内靠右">
-              <span>03:12.47<span class="unit">秒</span></span>
-              <span>C#4</span>
-              <span>+12<span class="unit">音分</span></span>
-              <span>277.2<span class="unit">Hz</span></span>
+            <div class="playhead" id="playhead"></div>
+            <div class="hud">
+              <div class="coord" id="coord" title="四列像素宽度固定，数值在列内靠右">
+                <span id="coord-time">03:12.47<span class="unit">秒</span></span>
+                <span>C#4</span>
+                <span>+12<span class="unit">音分</span></span>
+                <span>277.2<span class="unit">Hz</span></span>
+              </div>
+              <button class="info" id="info" type="button" title="按住查看当前内容">i</button>
             </div>
           </div>
-        </div>
-        <div class="overview">
-          <div class="overview-bar"><div class="overview-window"></div></div>
         </div>
         <div class="panel-title" style="position:absolute;left:60px;top:6px;padding:0;background:transparent;border:none;">
           <span><span class="mark">2</span>钢琴卷</span>
         </div>
-        <div class="panel-title" style="position:absolute;right:10px;bottom:96px;padding:0;background:transparent;">
-          <span><span class="mark">3</span>坐标格</span>
-        </div>
       </section>
 
       <aside class="right">
-        <div class="panel params">
-          <div class="panel-title"><span><span class="mark">4</span>合成参数</span></div>
+        <div class="panel slot-bar">
+          <span class="mark">4</span>
+          <div class="ab">
+            <button class="on" id="slot-a" type="button">A</button>
+            <button id="slot-b" type="button">B</button>
+          </div>
+          <span class="grow"></span>
+          <button class="ghost" id="bypass" type="button">旁通</button>
+          <button class="ghost" id="clear" type="button">清空</button>
+        </div>
+
+        <div class="panel body-panel params" id="params">
+          <div class="panel-title"><span><span class="mark">5</span>合成参数</span></div>
           <p class="caption">将要送去下一次合成的编辑值。</p>
           <div class="field"><span class="k">F0 估计器</span><span class="v">RMVPE</span></div>
           <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
           <div class="field" style="display:block;padding-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;"><span class="k">音高偏移</span><span class="v">+12.0</span></div>
-            <div class="slider"><i></i></div>
+            <div style="display:flex;justify-content:space-between;padding:0 12px;"><span class="k">音高偏移</span><span class="v">+12.0</span></div>
+            <div class="slider" style="margin:6px 12px 0;"><i></i></div>
           </div>
           <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
           <div class="field"><span class="k">CFG 强度</span><span class="v">0.90</span></div>
@@ -461,11 +482,9 @@
           <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
         </div>
 
-        <div class="panel copy">
-          <div class="panel-title">
-            <span><span class="mark">5</span>当前副本</span>
-            <div class="ab"><button class="on">A</button><button>B</button></div>
-          </div>
+        <div class="panel body-panel copy hidden" id="copy">
+          <div class="panel-title"><span><span class="mark">6</span>当前内容</span></div>
+          <p class="caption">这个副本里已经写好的合成结果，以及当时用过的全部参数。只读。</p>
           <div class="warn">编辑中的参数尚未写入这个副本</div>
           <div class="field"><span class="k">回放</span><span class="v">合成音频</span></div>
           <div class="field"><span class="k">音高</span><span class="v">已检测</span></div>
@@ -479,35 +498,181 @@
           <div class="field"><span class="k">输出声码器</span><span class="v">pc-nsf-hifigan</span></div>
           <div class="field"><span class="k">覆盖区间</span><span class="v">3.00 – 5.00 秒</span></div>
           <div class="field"><span class="k">合成耗时</span><span class="v">12.3 秒</span></div>
-          <div class="copy-actions">
-            <button class="ghost">旁通</button>
-            <button class="ghost">清空</button>
-          </div>
         </div>
       </aside>
     </div>
 
     <div class="bottom">
-      <span class="mark">6</span>
-      <button class="btn primary">音高检测</button>
-      <button class="btn primary">开始合成</button>
-      <button class="btn">取消</button>
-      <div class="process">
-        <div class="fill"></div>
-        <div class="label"><span class="mark" style="margin-right:8px;">7</span>扩散合成 62%</div>
+      <span class="mark">7</span>
+      <button class="btn primary" id="detect" type="button">音高检测</button>
+      <button class="btn primary" id="synth" type="button">开始合成</button>
+      <button class="btn" id="cancel" type="button" disabled>取消</button>
+      <div class="process" id="process">
+        <div class="fill" id="fill"></div>
+        <div class="label" id="process-label">空闲</div>
       </div>
     </div>
   </div>
 
   <div class="legend">
     <div><span class="mark">1</span><span><strong>音色库</strong> 选择参考音频，写入当前副本下一次合成要用的音色。</span></div>
-    <div><span class="mark">2</span><span><strong>钢琴卷</strong> 看波形、音高曲线、尚未合成的窗口缺口。</span></div>
-    <div><span class="mark">3</span><span><strong>坐标格</strong> 宽 248 像素，永远四列：时间、音名、音分、频率。数字变化时格子宽度不变。</span></div>
-    <div><span class="mark">4</span><span><strong>合成参数</strong> 你正在拧的旋钮，下一次点「开始合成」才送进引擎。</span></div>
-    <div><span class="mark">5</span><span><strong>当前副本</strong> 这个 A/B 槽位里已经写好的合成结果，以及当时用过的全部参数。回放三种取值：合成音频、空（宿主原声）、原声（旁通）。旁通与清空作用在这个副本上。</span></div>
-    <div><span class="mark">6</span><span><strong>底栏动词</strong> 音高检测、开始合成、取消。取消只在任务进行中可点。</span></div>
-    <div><span class="mark">7</span><span><strong>过程格</strong> 宽 280 像素，永远占着底栏右侧。排队、加载、阶段进度、失败、未选音色，全部写在这一格。合成成功后这一格变回空白，耗时写到当前副本里。</span></div>
+    <div><span class="mark">2</span><span><strong>钢琴卷</strong> 在时间轴上按下或拖动左键，会把宿主播放头写到对应时刻。双指滚动仍然平移视口。</span></div>
+    <div><span class="mark">3</span><span><strong>坐标格与圆圈 i</strong> 坐标格宽 248 像素、高 22 像素；圆圈 i 在它右边，同样 22 像素高。按住 i 只切换下面那一块为当前内容。</span></div>
+    <div><span class="mark">4</span><span><strong>槽位条</strong> 右边栏顶部，始终显示。左边 A/B 选当前副本，右边旁通与清空作用在这个副本上。</span></div>
+    <div><span class="mark">5</span><span><strong>合成参数</strong> 右边栏主体默认显示这一块，高度铺满，没有上下滚动条。</span></div>
+    <div><span class="mark">6</span><span><strong>当前内容</strong> 按住圆圈 i 时占据右边栏主体：只读快照，没有按钮。</span></div>
+    <div><span class="mark">7</span><span><strong>底栏与过程格</strong> 过程格宽 280 像素。空闲写「空闲」。进行中写阶段与百分比。完成、失败、取消后那个字再停三秒，然后回到空闲。</span></div>
   </div>
 </div>
+<script>
+(function () {
+  const roll = document.getElementById("roll");
+  const playhead = document.getElementById("playhead");
+  const coordTime = document.getElementById("coord-time");
+  const info = document.getElementById("info");
+  const params = document.getElementById("params");
+  const copy = document.getElementById("copy");
+  const detect = document.getElementById("detect");
+  const synth = document.getElementById("synth");
+  const cancel = document.getElementById("cancel");
+  const process = document.getElementById("process");
+  const fill = document.getElementById("fill");
+  const processLabel = document.getElementById("process-label");
+  const slotA = document.getElementById("slot-a");
+  const slotB = document.getElementById("slot-b");
+  const bypass = document.getElementById("bypass");
+
+  function formatTime (seconds) {
+    const totalHundredths = Math.round(seconds * 100);
+    const minutes = Math.floor(totalHundredths / 6000);
+    const remainder = totalHundredths % 6000;
+    const clock = Math.floor(remainder / 100);
+    const hundredths = remainder % 100;
+    const pad = (n) => String(n).padStart(2, "0");
+    return pad(minutes) + ":" + pad(clock) + "." + pad(hundredths);
+  }
+
+  function seekFromEvent (event) {
+    const rect = roll.getBoundingClientRect();
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const ratio = rect.width > 0 ? x / rect.width : 0;
+    playhead.style.left = (ratio * 100).toFixed(2) + "%";
+    coordTime.innerHTML = formatTime(ratio * 16) + '<span class="unit">秒</span>';
+  }
+
+  let seeking = false;
+  roll.addEventListener("mousedown", function (event) {
+    if (event.button !== 0) return;
+    if (event.target.closest(".info")) return;
+    seeking = true;
+    seekFromEvent(event);
+    event.preventDefault();
+  });
+  window.addEventListener("mousemove", function (event) {
+    if (!seeking) return;
+    seekFromEvent(event);
+  });
+  window.addEventListener("mouseup", function () {
+    seeking = false;
+    info.classList.remove("held");
+    params.classList.remove("hidden");
+    copy.classList.add("hidden");
+  });
+
+  info.addEventListener("mousedown", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    info.classList.add("held");
+    params.classList.add("hidden");
+    copy.classList.remove("hidden");
+  });
+
+  slotA.addEventListener("click", function () {
+    slotA.classList.add("on");
+    slotB.classList.remove("on");
+  });
+  slotB.addEventListener("click", function () {
+    slotB.classList.add("on");
+    slotA.classList.remove("on");
+  });
+  bypass.addEventListener("click", function () {
+    bypass.classList.toggle("on");
+  });
+
+  let jobTimer = 0;
+  let lingerTimer = 0;
+  let running = false;
+
+  function setIdle () {
+    running = false;
+    fill.style.width = "0";
+    processLabel.textContent = "空闲";
+    processLabel.style.color = "";
+    detect.disabled = false;
+    synth.disabled = false;
+    cancel.disabled = true;
+  }
+
+  function linger (text, color) {
+    running = false;
+    fill.style.width = "0";
+    processLabel.textContent = text;
+    processLabel.style.color = color || "";
+    detect.disabled = false;
+    synth.disabled = false;
+    cancel.disabled = true;
+    clearTimeout(lingerTimer);
+    lingerTimer = setTimeout(setIdle, 3000);
+  }
+
+  function runJob (stages, doneText) {
+    if (running) return;
+    running = true;
+    clearTimeout(jobTimer);
+    clearTimeout(lingerTimer);
+    processLabel.style.color = "";
+    detect.disabled = true;
+    synth.disabled = true;
+    cancel.disabled = false;
+    let index = 0;
+    function tick () {
+      if (!running) return;
+      if (index >= stages.length) {
+        linger(doneText, "var(--success)");
+        return;
+      }
+      const stage = stages[index];
+      fill.style.width = Math.round(stage.fraction * 100) + "%";
+      processLabel.textContent = stage.label;
+      index += 1;
+      jobTimer = setTimeout(tick, 420);
+    }
+    tick();
+  }
+
+  detect.addEventListener("click", function () {
+    runJob([
+      { label: "音高检测 20%", fraction: 0.20 },
+      { label: "音高检测 55%", fraction: 0.55 },
+      { label: "音高检测 100%", fraction: 1.0 }
+    ], "已完成");
+  });
+  synth.addEventListener("click", function () {
+    runJob([
+      { label: "加载音频 12%", fraction: 0.12 },
+      { label: "编码内容 38%", fraction: 0.38 },
+      { label: "扩散合成 62%", fraction: 0.62 },
+      { label: "二级声码器 88%", fraction: 0.88 },
+      { label: "写出结果 100%", fraction: 1.0 }
+    ], "已完成");
+  });
+  cancel.addEventListener("click", function () {
+    if (!running) return;
+    running = false;
+    clearTimeout(jobTimer);
+    linger("已取消", "");
+  });
+})();
+</script>
 </body>
 </html>

@@ -80,8 +80,8 @@ target_sources(deepsvc PRIVATE
     Source/ARA/DeepSvcEditorView.h
     Source/ARA/DeepSvcPlaybackRenderer.cpp
     Source/ARA/DeepSvcPlaybackRenderer.h
-    Source/ARA/EventAudioModification.cpp
-    Source/ARA/EventAudioModification.h
+    Source/ARA/DeepSvcAudioModification.cpp
+    Source/ARA/DeepSvcAudioModification.h
 
     Source/Content/ContentArchive.h
     Source/Content/ContentKey.h
@@ -100,12 +100,20 @@ target_sources(deepsvc PRIVATE
     Source/Timbre/TimbreLibrary.cpp
     Source/Timbre/TimbreLibrary.h
 
+    Source/UI/CopyPanel.cpp
+    Source/UI/CopyPanel.h
     Source/UI/DeepSvcLookAndFeel.cpp
     Source/UI/DeepSvcLookAndFeel.h
     Source/UI/ParameterPanel.cpp
     Source/UI/ParameterPanel.h
     Source/UI/PianoRollView.cpp
     Source/UI/PianoRollView.h
+    Source/UI/ProcessCell.cpp
+    Source/UI/ProcessCell.h
+    Source/UI/RightColumn.cpp
+    Source/UI/RightColumn.h
+    Source/UI/SlotBar.cpp
+    Source/UI/SlotBar.h
     Source/UI/TimbrePanel.cpp
     Source/UI/TimbrePanel.h
     Source/UI/TimelineOverviewComponent.cpp

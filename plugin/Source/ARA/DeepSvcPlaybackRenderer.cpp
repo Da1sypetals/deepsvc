@@ -304,6 +304,9 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
                     + static_cast<double> (sample) / hostSampleRate;
                 const double contentTime = item.contentStartSeconds
                     + (playbackTime - item.timelineStartSeconds) * contentRatio;
+                if (! useSourceAudio
+                    && (contentTime < item.synthStartTime || contentTime >= item.synthEndTime))
+                    continue;
                 dest[destinationStart + sample] += readContentSample (audioData, audioNumSamples,
                                                                       contentTime - audioTimeOrigin);
             }
@@ -340,19 +343,20 @@ DeepSvcPlaybackRenderer::buildRenderPlan() const
         if (! projection.hasValidPlacement() || ! projection.contentKey.isValid())
             continue;
 
-        const auto* event = documentController->findEvent (projection.contentKey);
-        if (event == nullptr)
+        const auto* modification = documentController->findModification (projection.contentKey);
+        if (modification == nullptr)
             continue;
 
         RenderItem item;
         item.contentKey = projection.contentKey;
-        item.sourceAudio = event->sourceAudio;
+        item.sourceAudio = modification->sourceAudio;
 
-        const auto& slot = event->active();
+        const auto& slot = modification->active();
         if (slot.hasSynthAudio() && ! slot.bypass)
         {
             item.audio = slot.synthAudio->samples;
             item.synthStartTime = slot.synthAudio->synthStartTime;
+            item.synthEndTime = slot.synthAudio->synthEndTime;
         }
 
         item.timelineStartSeconds = projection.startInPlaybackTime;
