@@ -47,6 +47,7 @@ public:
                                   std::vector<float> f0Values,
                                   uint64_t contentRevision);
     void setTimelineContentPlacements (std::vector<TimelineContentPlacement> placements);
+    void setBypassed (bool shouldBypass);
 
     // ---- 视口 ----
     struct ViewportState
@@ -121,6 +122,7 @@ private:
     void paintCoordinateReadout (juce::Graphics& g);
     void layoutOverlayControls();
     void seekPlayheadAt (int x);
+    juce::Colour toneColour (juce::Colour colour) const noexcept;
     juce::Rectangle<int> coordinateChipBounds() const noexcept;
     juce::Rectangle<int> infoButtonBounds() const noexcept;
 
@@ -131,9 +133,11 @@ private:
         void paint (juce::Graphics& g) override;
         void mouseDown (const juce::MouseEvent& e) override;
         void mouseUp (const juce::MouseEvent& e) override;
+        void setMuted (bool shouldMute);
         std::function<void (bool held)> onHoldChanged;
     private:
         bool held = false;
+        bool muted = false;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoHoldButton)
     };
 
@@ -166,6 +170,7 @@ private:
 
     bool isSeeking = false;
     bool isPanning = false;
+    bool bypassed = false;
     double panStartVisibleSeconds = 0.0;
     float panStartVerticalScroll = 0.0f;
     std::optional<juce::Point<int>> mousePosition;

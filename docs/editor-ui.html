@@ -109,6 +109,9 @@
     display: flex;
     flex-direction: column;
   }
+  .piano-wrap.bypassed {
+    filter: saturate(0.22);
+  }
   .piano {
     flex: 1;
     display: grid;
@@ -470,7 +473,7 @@
         <div class="panel body-panel params" id="params">
           <div class="panel-title"><span><span class="mark">5</span>合成参数</span></div>
           <p class="caption">将要送去下一次合成的编辑值。</p>
-          <div class="field"><span class="k">F0 估计器</span><span class="v">RMVPE</span></div>
+          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
           <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
           <div class="field" style="display:block;padding-bottom:8px;">
             <div style="display:flex;justify-content:space-between;padding:0 12px;"><span class="k">音高偏移</span><span class="v">+12.0</span></div>
@@ -489,7 +492,7 @@
           <div class="field"><span class="k">回放</span><span class="v">合成音频</span></div>
           <div class="field"><span class="k">音高</span><span class="v">已检测</span></div>
           <div class="field"><span class="k">音色</span><span class="v">ref-male.wav</span></div>
-          <div class="field"><span class="k">F0 估计器</span><span class="v">RMVPE</span></div>
+          <div class="field"><span class="k">F0 检测算法</span><span class="v">RMVPE</span></div>
           <div class="field"><span class="k">扩散步数</span><span class="v">16</span></div>
           <div class="field"><span class="k">音高偏移</span><span class="v">+12.0 半音</span></div>
           <div class="field"><span class="k">音高微调</span><span class="v">0 音分</span></div>
@@ -597,6 +600,7 @@
   });
   bypass.addEventListener("click", function () {
     bypass.classList.toggle("on");
+    document.querySelector(".piano-wrap").classList.toggle("bypassed", bypass.classList.contains("on"));
   });
 
   let jobTimer = 0;

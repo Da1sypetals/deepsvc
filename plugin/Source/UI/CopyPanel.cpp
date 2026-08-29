@@ -91,7 +91,7 @@ void CopyPanel::paint (juce::Graphics& g)
             : (state.hasPitch ? juce::String (u8"已检测") : juce::String (u8"未检测")) },
         { juce::String (u8"音色"), snap (state.synthTimbreFile.isNotEmpty()
                                          ? state.synthTimbreFile : dash()) },
-        { juce::String (u8"F0 估计器"), snap (estimatorName (state.synthParams.f0Estimator)) },
+        { juce::String (u8"F0 检测算法"), snap (estimatorName (state.synthParams.f0Estimator)) },
         { juce::String (u8"扩散步数"), snap (juce::String (state.synthParams.diffusionSteps)) },
         { juce::String (u8"音高偏移"), snap (signedNumber (state.synthParams.pitchShift, 1)
                                            + juce::String (u8" 半音")) },

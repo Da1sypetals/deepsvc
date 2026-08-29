@@ -166,7 +166,7 @@ void DeepSvcLookAndFeel::drawLinearSlider (juce::Graphics& g,
 }
 
 void DeepSvcLookAndFeel::drawScrollbar (juce::Graphics& g,
-                                        juce::ScrollBar&,
+                                        juce::ScrollBar& scrollbar,
                                         int x, int y, int width, int height,
                                         bool isScrollbarVertical,
                                         int thumbStartPosition,
@@ -190,6 +190,9 @@ void DeepSvcLookAndFeel::drawScrollbar (juce::Graphics& g,
         colour = UIColors::pink500;
     else if (isMouseOver)
         colour = UIColors::pink300;
+
+    if (scrollbar.getProperties()["bypassDesaturate"])
+        colour = colour.withMultipliedSaturation (UIColors::bypassSaturation);
 
     g.setColour (colour);
     g.fillRoundedRectangle (thumb, 3.0f);

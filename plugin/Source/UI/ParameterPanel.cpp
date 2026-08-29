@@ -14,7 +14,7 @@ ParameterPanel::ParameterPanel (juce::AudioProcessorValueTreeState& state)
                          &cfgLabel, &gainLabel, &vocoderLabel })
         label->setColour (juce::Label::textColourId, UIColors::ink900);
 
-    estimatorLabel.setText (juce::String (u8"F0 估计器"), juce::dontSendNotification);
+    estimatorLabel.setText (juce::String (u8"F0 检测算法"), juce::dontSendNotification);
     addAndMakeVisible (estimatorLabel);
     estimatorCombo.addItem ("RMVPE", 1);
     estimatorCombo.addItem ("FCPE", 2);

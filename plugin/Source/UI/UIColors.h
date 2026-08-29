@@ -12,6 +12,7 @@ struct UIColors
     static constexpr int scrollBarThickness = 12;
     static constexpr float panelCornerRadius = 8.0f;
     static constexpr float controlCornerRadius = 6.0f;
+    static constexpr float bypassSaturation = 0.22f;
 
     // 粉色阶
     static inline juce::Colour pink050 { 0xFFFDF6F8 };  // 窗口背景、下拉面板底色

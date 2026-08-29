@@ -123,7 +123,10 @@ DeepSvcEditor::DeepSvcEditor (DeepSvcAudioProcessor& p)
     {
         if (auto* dc = documentController())
             if (presentedContentKey.isValid() && displayedSlot >= 0)
+            {
                 dc->setSlotBypass (presentedContentKey, displayedSlot, bypass);
+                pianoRoll.setBypassed (bypass);
+            }
     };
     rightColumn.slotBar.onClearRequested = [this] { confirmClearSynth(); };
 
@@ -612,6 +615,7 @@ void DeepSvcEditor::updateJobStatusDisplay()
 
     rightColumn.copyPanel.setState (copyState);
     rightColumn.slotBar.setState (slotState);
+    pianoRoll.setBypassed (slotState.bypass);
 
     const auto now = juce::Time::getMillisecondCounterHiRes();
     juce::String text;

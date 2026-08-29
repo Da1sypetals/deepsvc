@@ -46,6 +46,19 @@ bool placementIsEdited (const TimelineContentPlacement& placement,
     return placement.contentKey == editedKey && placement.projection.equals (editedProjection);
 }
 
+float wheelPrimaryDelta (const juce::MouseWheelDetails& wheel) noexcept
+{
+    return std::abs (wheel.deltaY) >= std::abs (wheel.deltaX) ? wheel.deltaY : wheel.deltaX;
+}
+
+double wheelNotchesFrom (const juce::MouseWheelDetails& wheel) noexcept
+{
+    const float delta = wheelPrimaryDelta (wheel);
+    return wheel.isSmooth
+        ? static_cast<double> (delta) * 512.0 / 120.0
+        : static_cast<double> (delta) * 25.6;
+}
+
 } // namespace
 
 PianoRollView::InfoHoldButton::InfoHoldButton()
@@ -56,13 +69,25 @@ PianoRollView::InfoHoldButton::InfoHoldButton()
 void PianoRollView::InfoHoldButton::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (held ? UIColors::pink600 : UIColors::pink100);
+    const auto tone = [this] (juce::Colour colour)
+    {
+        return muted ? colour.withMultipliedSaturation (UIColors::bypassSaturation) : colour;
+    };
+    g.setColour (tone (held ? UIColors::pink600 : UIColors::pink100));
     g.fillEllipse (bounds);
-    g.setColour (held ? UIColors::pink600 : UIColors::pink200);
+    g.setColour (tone (held ? UIColors::pink600 : UIColors::pink200));
     g.drawEllipse (bounds, 1.0f);
-    g.setColour (held ? juce::Colours::white : UIColors::ink900);
+    g.setColour (tone (held ? juce::Colours::white : UIColors::ink900));
     g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::italic)));
     g.drawText ("i", getLocalBounds(), juce::Justification::centred, false);
+}
+
+void PianoRollView::InfoHoldButton::setMuted (bool shouldMute)
+{
+    if (muted == shouldMute)
+        return;
+    muted = shouldMute;
+    repaint();
 }
 
 void PianoRollView::InfoHoldButton::mouseDown (const juce::MouseEvent&)
@@ -158,6 +183,23 @@ void PianoRollView::setTimelineContentPlacements (std::vector<TimelineContentPla
 
     placements = std::move (newPlacements);
     repaint();
+}
+
+void PianoRollView::setBypassed (bool shouldBypass)
+{
+    if (bypassed == shouldBypass)
+        return;
+
+    bypassed = shouldBypass;
+    infoButton.setMuted (shouldBypass);
+    verticalScrollBar.getProperties().set ("bypassDesaturate", shouldBypass);
+    verticalScrollBar.repaint();
+    repaint();
+}
+
+juce::Colour PianoRollView::toneColour (juce::Colour colour) const noexcept
+{
+    return bypassed ? colour.withMultipliedSaturation (UIColors::bypassSaturation) : colour;
 }
 
 const TimelineContentPlacement* PianoRollView::findEditedPlacement() const noexcept
@@ -578,15 +620,17 @@ void PianoRollView::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
     // 操作逻辑与 Studio One 一致（docs/ara.md 第 6.5 节）：
     // 滚轮上下滚动，Shift+滚轮左右滚动，Cmd+滚轮纵向缩放，Cmd+Shift+滚轮横向缩放。
     // macOS 在按住 Shift 时把垂直滚轮转换成横向 delta（deltaY 恒为 0，滚动量在
-    // deltaX），鼠标路径取两者中非零的一个。
+    // deltaX）。格数取绝对值更大的那个轴，触控板与鼠标都适用。
     // delta 归一化为滚轮格数：JUCE 在 macOS 对鼠标滚轮的换算是 10/256（一格约
     // 0.039），对触控板是 pixels × 0.5/256（120 像素折一格）
-    const float mouseDelta = wheel.deltaY != 0.0f ? wheel.deltaY : wheel.deltaX;
-    const double wheelNotches = wheel.isSmooth
-        ? static_cast<double> (wheel.deltaY) * 512.0 / 120.0
-        : static_cast<double> (mouseDelta) * 25.6;
+    const double wheelNotches = wheelNotchesFrom (wheel);
+    const bool commandShift = e.mods.isCommandDown() && e.mods.isShiftDown();
+    const bool commandHorizontalDelta = e.mods.isCommandDown()
+        && wheel.deltaY == 0.0f && wheel.deltaX != 0.0f;
+    const bool shiftPan = ! e.mods.isCommandDown()
+        && (e.mods.isShiftDown() || (wheel.deltaY == 0.0f && wheel.deltaX != 0.0f));
 
-    if (e.mods.isCommandDown() && e.mods.isShiftDown())
+    if (commandShift || commandHorizontalDelta)
     {
         // Cmd+Shift+滚轮：以光标为锚点横向缩放（时间轴），每格 1.25 倍
         zoomHorizontalAt (e.x, std::pow (1.25, wheelNotches));
@@ -597,6 +641,24 @@ void PianoRollView::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
     {
         // Cmd+滚轮 / 触控板 Cmd+上下滑动：以光标为锚点纵向缩放（琴键高度）
         zoomVerticalAt (e.y, std::pow (1.25, wheelNotches));
+        return;
+    }
+
+    if (shiftPan)
+    {
+        // Shift+滚轮：时间线左右滚动。shift=1 用 dY，shift 标志为 0 时用量在 dX。
+        constexpr float kTrackpadPixelsPerDelta = 512.0f;
+        const double deltaPixels = wheel.isSmooth
+            ? static_cast<double> (wheelPrimaryDelta (wheel)) * kTrackpadPixelsPerDelta
+            : wheelNotches * 120.0;
+        const double newVisibleStart = timelineCamera.visibleStartSeconds
+            - deltaPixels / timelineCamera.pixelsPerSecond;
+        commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
+                                                    newVisibleStart,
+                                                    0.0,
+                                                    timelineCamera.pixelsPerSecond));
+        if (onUserViewportChanged)
+            onUserViewportChanged();
         return;
     }
 
@@ -621,20 +683,6 @@ void PianoRollView::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
             updateScrollBarRange();
             repaint();
         }
-        if (onUserViewportChanged)
-            onUserViewportChanged();
-        return;
-    }
-
-    if (e.mods.isShiftDown())
-    {
-        // 鼠标 Shift+滚轮：横向滚动，每格 120 像素
-        const double newVisibleStart = timelineCamera.visibleStartSeconds
-            - wheelNotches * 120.0 / timelineCamera.pixelsPerSecond;
-        commitViewportRequest (makeViewportRequest (TimelineViewportRequest::Kind::Manual,
-                                                    newVisibleStart,
-                                                    0.0,
-                                                    timelineCamera.pixelsPerSecond));
         if (onUserViewportChanged)
             onUserViewportChanged();
         return;
@@ -696,7 +744,7 @@ void PianoRollView::timerCallback()
 
 void PianoRollView::paint (juce::Graphics& g)
 {
-    g.fillAll (UIColors::pink050);
+    g.fillAll (toneColour (UIColors::pink050));
 
     paintLanes (g);
     paintPlacements (g);
@@ -740,12 +788,12 @@ void PianoRollView::paintLanes (juce::Graphics& g)
         // 黑键行铺浅粉，半音线 pink100，C 行线 pink200
         if (isBlackKey (midi))
         {
-            g.setColour (UIColors::pink100);
+            g.setColour (toneColour (UIColors::pink100));
             g.fillRect (static_cast<float> (contentLeft), yTop,
                         static_cast<float> (contentRight - contentLeft), yBottom - yTop);
         }
 
-        g.setColour (midi % 12 == 0 ? UIColors::pink200 : UIColors::pink100);
+        g.setColour (toneColour (midi % 12 == 0 ? UIColors::pink200 : UIColors::pink100));
         g.drawHorizontalLine (static_cast<int> (std::round (yBottom)),
                               static_cast<float> (contentLeft), static_cast<float> (contentRight));
     }
@@ -758,7 +806,7 @@ void PianoRollView::paintKeyBed (juce::Graphics& g)
     const int bottom = rulerHeight + getTimelineContentViewportHeight();
 
     auto bedArea = juce::Rectangle<int> (0, top, pianoKeyWidth, bottom - top);
-    g.setColour (UIColors::keyWhite);
+    g.setColour (toneColour (UIColors::keyWhite));
     g.fillRect (bedArea);
 
     juce::Graphics::ScopedSaveState scoped (g);
@@ -778,19 +826,19 @@ void PianoRollView::paintKeyBed (juce::Graphics& g)
 
         if (isBlackKey (midi))
         {
-            g.setColour (UIColors::keyBlack);
+            g.setColour (toneColour (UIColors::keyBlack));
             g.fillRect (0.0f, yTop, pianoKeyWidth * 0.62f, juce::jmax (1.0f, rowHeight));
         }
         else
         {
-            g.setColour (UIColors::pink200);
+            g.setColour (toneColour (UIColors::pink200));
             g.drawHorizontalLine (static_cast<int> (std::round (yBottom)),
                                   0.0f, static_cast<float> (pianoKeyWidth));
         }
 
         if (midi % 12 == 0 && rowHeight >= 12.0f)
         {
-            g.setColour (UIColors::ink600);
+            g.setColour (toneColour (UIColors::ink600));
             g.setFont (juce::Font (juce::FontOptions (11.0f)));
             g.drawText (noteNameFor (midi), 0, static_cast<int> (yTop),
                         pianoKeyWidth - 6, static_cast<int> (rowHeight),
@@ -798,7 +846,7 @@ void PianoRollView::paintKeyBed (juce::Graphics& g)
         }
     }
 
-    g.setColour (UIColors::pink200);
+    g.setColour (toneColour (UIColors::pink200));
     g.drawVerticalLine (pianoKeyWidth - 1, static_cast<float> (top), static_cast<float> (bottom));
 }
 
@@ -806,7 +854,7 @@ void PianoRollView::paintRuler (juce::Graphics& g)
 {
     auto rulerArea = juce::Rectangle<int> (pianoKeyWidth, 0,
                                            getTimelineContentViewportWidth(), rulerHeight);
-    g.setColour (UIColors::pink100);
+    g.setColour (toneColour (UIColors::pink100));
     g.fillRect (rulerArea);
 
     const auto mapper = makeViewMapper();
@@ -820,15 +868,15 @@ void PianoRollView::paintRuler (juce::Graphics& g)
         if (t < 0.0)
             continue;
         const int x = mapper.timeToX (t);
-        g.setColour (UIColors::pink300);
+        g.setColour (toneColour (UIColors::pink300));
         g.drawVerticalLine (x, static_cast<float> (rulerHeight - 8), static_cast<float> (rulerHeight));
-        g.setColour (UIColors::ink600);
+        g.setColour (toneColour (UIColors::ink600));
         g.drawText (juce::String (t, step < 1.0 ? 1 : 0) + " s",
                     x + 3, 0, 60, rulerHeight - 8,
                     juce::Justification::centredLeft, false);
     }
 
-    g.setColour (UIColors::pink200);
+    g.setColour (toneColour (UIColors::pink200));
     g.drawHorizontalLine (rulerHeight - 1, static_cast<float> (pianoKeyWidth),
                           static_cast<float> (pianoKeyWidth + getTimelineContentViewportWidth()));
 }
@@ -855,10 +903,10 @@ void PianoRollView::paintPlacements (juce::Graphics& g)
         if (x2 < pianoKeyWidth || x1 > pianoKeyWidth + getTimelineContentViewportWidth())
             continue;
 
-        g.setColour (colour.withAlpha (isActive ? 0.14f : 0.07f));
+        g.setColour (toneColour (colour.withAlpha (isActive ? 0.14f : 0.07f)));
         g.fillRect (juce::Rectangle<int> (x1, top, x2 - x1, height));
 
-        g.setColour (colour.withAlpha (isActive ? 0.9f : 0.4f));
+        g.setColour (toneColour (colour.withAlpha (isActive ? 0.9f : 0.4f)));
         g.drawRect (juce::Rectangle<int> (x1, top, x2 - x1, height), isActive ? 2 : 1);
     }
 }
@@ -893,7 +941,7 @@ void PianoRollView::paintWaveform (juce::Graphics& g, const TimelineContentPlace
     juce::Graphics::ScopedSaveState scoped (g);
     g.reduceClipRegion (clipX1, top, clipX2 - clipX1, height);
 
-    g.setColour (UIColors::pink300.withAlpha (0.7f));
+    g.setColour (toneColour (UIColors::pink300.withAlpha (0.7f)));
     for (int x = clipX1; x < clipX2; ++x)
     {
         const double timelineTime = mapper.xToTime (x);
@@ -976,7 +1024,7 @@ void PianoRollView::paintF0Curve (juce::Graphics& g, const TimelineContentPlacem
         penDown = true;
     }
 
-    g.setColour (UIColors::pink600);
+    g.setColour (toneColour (UIColors::pink600));
     g.strokePath (curve, juce::PathStrokeType (2.0f));
 }
 
@@ -1026,9 +1074,9 @@ void PianoRollView::paintUnsynthesized (juce::Graphics& g, const TimelineContent
             continue;
 
         auto bounds = juce::Rectangle<int> (x1, top, x2 - x1, height);
-        g.setColour (UIColors::warningBg.withAlpha (0.72f));
+        g.setColour (toneColour (UIColors::warningBg.withAlpha (0.72f)));
         g.fillRect (bounds);
-        g.setColour (UIColors::warning);
+        g.setColour (toneColour (UIColors::warning));
         g.drawRect (bounds, 1);
         if (bounds.getWidth() >= 56)
             g.drawText (label, bounds, juce::Justification::centred, false);
@@ -1043,7 +1091,7 @@ void PianoRollView::paintPlayhead (juce::Graphics& g)
     if (x < pianoKeyWidth || x > contentRight)
         return;
 
-    g.setColour (UIColors::pink900);
+    g.setColour (toneColour (UIColors::pink900));
     g.drawVerticalLine (x, 0.0f, static_cast<float> (rulerHeight + getTimelineContentViewportHeight()));
 }
 
@@ -1077,9 +1125,9 @@ void PianoRollView::paintCoordinateReadout (juce::Graphics& g)
 
     auto area = coordinateChipBounds();
 
-    g.setColour (UIColors::pink100);
+    g.setColour (toneColour (UIColors::pink100));
     g.fillRoundedRectangle (area.toFloat(), UIColors::controlCornerRadius);
-    g.setColour (UIColors::pink200);
+    g.setColour (toneColour (UIColors::pink200));
     g.drawRoundedRectangle (area.toFloat(), UIColors::controlCornerRadius, 1.0f);
 
     const int columns[] = { 64, 48, 58, 78 };
@@ -1095,7 +1143,7 @@ void PianoRollView::paintCoordinateReadout (juce::Graphics& g)
         auto cell = juce::Rectangle<int> (x, area.getY(), columns[i], area.getHeight());
         if (i > 0)
         {
-            g.setColour (UIColors::pink200);
+            g.setColour (toneColour (UIColors::pink200));
             g.drawVerticalLine (x, static_cast<float> (area.getY() + 3),
                                 static_cast<float> (area.getBottom() - 3));
         }
@@ -1103,13 +1151,13 @@ void PianoRollView::paintCoordinateReadout (juce::Graphics& g)
         auto inner = cell.reduced (4, 0);
         if (units[i].isNotEmpty())
         {
-            g.setColour (UIColors::ink600);
+            g.setColour (toneColour (UIColors::ink600));
             const int unitWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), units[i]);
             g.drawText (units[i], inner.removeFromRight (unitWidth),
                         juce::Justification::centredRight, false);
             inner.removeFromRight (3);
         }
-        g.setColour (UIColors::ink900);
+        g.setColour (toneColour (UIColors::ink900));
         g.drawText (values[i], inner, juce::Justification::centredRight, false);
         x += columns[i];
     }
