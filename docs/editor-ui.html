@@ -204,7 +204,7 @@
   }
   .hud {
     position: absolute;
-    right: 6px;
+    left: 6px;
     bottom: 6px;
     display: flex;
     align-items: center;
@@ -226,7 +226,7 @@
   .coord span {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: center;
     padding: 0 6px;
     border-right: 1px solid var(--pink200);
     color: var(--ink900);
@@ -436,7 +436,7 @@
 <body>
 <div class="page">
   <h1>编辑器界面</h1>
-  <p class="lead">在钢琴卷时间轴上按下左键或拖动，会改写宿主播放头。音色库与钢琴卷之间是合成参数，顶部槽位条始终可点：A/B 切换当前副本，旁通与清空作用在这个副本上。下面默认是合成参数；按住钢琴卷右下角、坐标格右边的圆圈 i，换成只读的当前内容，松开后合成参数回来。过程格空闲时写「空闲」；任何任务结束后那个状态再停三秒，然后回到空闲。</p>
+  <p class="lead">在钢琴卷时间轴上按下左键或拖动，会改写宿主播放头。音色库与钢琴卷之间是合成参数，顶部槽位条始终可点：A/B 切换当前副本，旁通与清空作用在这个副本上。下面默认是合成参数；按住钢琴卷左下角、坐标格左边的圆圈 i，换成只读的当前内容，松开后合成参数回来。过程格空闲时写「空闲」；任何任务结束后那个状态再停三秒，然后回到空闲。</p>
 
   <div class="window">
     <div class="body">
@@ -542,13 +542,13 @@
             <div class="unsynth">尚未合成</div>
             <div class="playhead" id="playhead"></div>
             <div class="hud">
-              <div class="coord" id="coord" title="四列像素宽度固定，数值在列内靠右">
+              <button class="info" id="info" type="button" title="按住查看当前内容">i</button>
+              <div class="coord" id="coord" title="四列像素宽度固定，数值在列内居中">
                 <span id="coord-time">03:12.47<span class="unit">秒</span></span>
                 <span>C#4</span>
                 <span>+12<span class="unit">音分</span></span>
                 <span>277.2<span class="unit">Hz</span></span>
               </div>
-              <button class="info" id="info" type="button" title="按住查看当前内容">i</button>
             </div>
           </div>
         </div>
@@ -573,7 +573,7 @@
   <div class="legend">
     <div><span class="mark">1</span><span><strong>音色库</strong> 选择参考音频，写入当前副本下一次合成要用的音色。</span></div>
     <div><span class="mark">2</span><span><strong>钢琴卷</strong> 在时间轴上按下或拖动左键，会把宿主播放头写到对应时刻。双指滚动仍然平移视口。</span></div>
-    <div><span class="mark">3</span><span><strong>坐标格与圆圈 i</strong> 坐标格宽 248 像素、高 22 像素；圆圈 i 在它右边，同样 22 像素高。按住 i 只切换下面那一块为当前内容。</span></div>
+    <div><span class="mark">3</span><span><strong>坐标格与圆圈 i</strong> 坐标格宽 248 像素、高 22 像素；圆圈 i 在它左边，同样 22 像素高。按住 i 只切换下面那一块为当前内容。</span></div>
     <div><span class="mark">4</span><span><strong>槽位条</strong> 参数栏顶部，始终显示。左边 A/B 选当前副本，右边旁通与清空作用在这个副本上。</span></div>
     <div><span class="mark">5</span><span><strong>合成参数</strong> 音色库与钢琴卷之间，高度铺满，没有上下滚动条。</span></div>
     <div><span class="mark">6</span><span><strong>当前内容</strong> 按住圆圈 i 时占据参数栏主体：只读快照，没有按钮。</span></div>

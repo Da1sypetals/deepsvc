@@ -27,6 +27,20 @@ private:
     void nudgeDiffusionSteps (int delta);
     void syncDiffusionStepsValue();
 
+    struct ValueSlider : juce::Slider
+    {
+        using juce::Slider::Slider;
+
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+        {
+            // 往上滚数值增大、滑块往右
+            auto inverted = wheel;
+            inverted.deltaY = -wheel.deltaY;
+            inverted.deltaX = -wheel.deltaX;
+            juce::Slider::mouseWheelMove (e, inverted);
+        }
+    };
+
     juce::AudioProcessorValueTreeState& apvts;
 
     juce::Label estimatorLabel;
@@ -36,17 +50,17 @@ private:
     juce::TextButton stepsDownButton { juce::String (u8"-") };
     juce::TextButton stepsUpButton { juce::String (u8"+") };
     juce::Label pitchShiftLabel;
-    juce::Slider pitchShiftSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    ValueSlider pitchShiftSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::TextButton octaveDownButton { juce::String (u8"-12") };
     juce::TextButton octaveUpButton { juce::String (u8"+12") };
     juce::Label pitchFineTuneLabel;
-    juce::Slider pitchFineTuneSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    ValueSlider pitchFineTuneSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::TextButton fineTuneDownButton { juce::String (u8"-5") };
     juce::TextButton fineTuneUpButton { juce::String (u8"+5") };
     juce::Label cfgLabel;
-    juce::Slider cfgSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    ValueSlider cfgSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label gainLabel;
-    juce::Slider gainSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    ValueSlider gainSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label vocoderLabel;
     juce::ComboBox vocoderCombo;
 

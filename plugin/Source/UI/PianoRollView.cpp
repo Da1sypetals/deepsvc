@@ -485,10 +485,9 @@ void PianoRollView::setCoordinateBottomInset (int pixels) noexcept
 
 juce::Rectangle<int> PianoRollView::infoButtonBounds() const noexcept
 {
-    const int contentRight = pianoKeyWidth + getTimelineContentViewportWidth();
     const int contentBottom = rulerHeight + getTimelineContentViewportHeight();
     const int chipBottomLimit = contentBottom - coordinateBottomInset;
-    return { contentRight - kChipMargin - kInfoSize,
+    return { pianoKeyWidth + kChipMargin,
              chipBottomLimit - kInfoSize - kChipMargin,
              kInfoSize, kInfoSize };
 }
@@ -496,7 +495,7 @@ juce::Rectangle<int> PianoRollView::infoButtonBounds() const noexcept
 juce::Rectangle<int> PianoRollView::coordinateChipBounds() const noexcept
 {
     const auto info = infoButtonBounds();
-    return { info.getX() - kInfoGap - kChipWidth, info.getY(), kChipWidth, kChipHeight };
+    return { info.getRight() + kInfoGap, info.getY(), kChipWidth, kChipHeight };
 }
 
 void PianoRollView::layoutOverlayControls()
@@ -1151,14 +1150,22 @@ void PianoRollView::paintCoordinateReadout (juce::Graphics& g)
         auto inner = cell.reduced (4, 0);
         if (units[i].isNotEmpty())
         {
-            g.setColour (toneColour (UIColors::ink600));
+            const int valueWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), values[i]);
             const int unitWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), units[i]);
-            g.drawText (units[i], inner.removeFromRight (unitWidth),
-                        juce::Justification::centredRight, false);
-            inner.removeFromRight (3);
+            constexpr int gap = 3;
+            auto group = inner.withSizeKeepingCentre (valueWidth + gap + unitWidth, inner.getHeight());
+            auto valueArea = group.removeFromLeft (valueWidth);
+            group.removeFromLeft (gap);
+            g.setColour (toneColour (UIColors::ink900));
+            g.drawText (values[i], valueArea, juce::Justification::centred, false);
+            g.setColour (toneColour (UIColors::ink600));
+            g.drawText (units[i], group, juce::Justification::centred, false);
         }
-        g.setColour (toneColour (UIColors::ink900));
-        g.drawText (values[i], inner, juce::Justification::centredRight, false);
+        else
+        {
+            g.setColour (toneColour (UIColors::ink900));
+            g.drawText (values[i], inner, juce::Justification::centred, false);
+        }
         x += columns[i];
     }
 }

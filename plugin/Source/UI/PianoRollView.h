@@ -79,7 +79,7 @@ public:
     std::function<void()> onUserViewportChanged;
     // 在时间轴标尺上按下或拖动左键时，把宿主播放头写到该时刻
     std::function<void (double seconds)> onSeekPlayhead;
-    // 按住右下角圆圈 i 时为 true，松开为 false
+    // 按住左下角圆圈 i 时为 true，松开为 false
     std::function<void (bool held)> onInfoHoldChanged;
 
     void paint (juce::Graphics& g) override;
