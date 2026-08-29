@@ -8,6 +8,7 @@ Supports VST3 and AudioUnit; works only on Apple Silicon because it heavily depe
 ## Acknowledgements
 
 - [OpenTune](https://github.com/YuFeng926/OpenTune) for inspiration and project architecture
+    - This software is **NOT** modified from OpenTune, and thus is not required to be distributed under AGPL.
 - [Diffsinger community vocoders](https://openvpi.github.io/vocoders/) and [Pupu-Vocoder](https://nsfpupuvocoder.github.io/) for vocoders
 - [YingMusic-SVC](https://github.com/GiantAILab/YingMusic-SVC) for SVC algorithm
 - [mlx](https://github.com/ml-explore/mlx) and [mlx-rs](https://github.com/oxiglade/mlx-rs) for hardware acceleration

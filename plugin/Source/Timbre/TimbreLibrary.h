@@ -4,9 +4,6 @@
 #include <juce_events/juce_events.h>
 
 // 音色库：一个目录中的音频文件集合，与文件系统双向同步。
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
 namespace deepsvc
 {
 
