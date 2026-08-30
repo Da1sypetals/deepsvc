@@ -1,4 +1,5 @@
 #include "EngineBridge.h"
+#include "EngineStatusStore.h"
 
 #include <dlfcn.h>
 
@@ -223,6 +224,8 @@ void EngineBridge::dispatchJobState (uint64_t jobId,
                                      double fraction,
                                      const juce::String& error)
 {
+    EngineStatusStore::getInstance().applyJobState (state, queuePosition, stage, fraction, error);
+
     const juce::ScopedLock lock (listenerLock);
     for (auto* listener : listeners)
         listener->engineJobState (jobId, state, queuePosition, stage, fraction, error);

@@ -88,8 +88,11 @@ target_sources(deepsvc PRIVATE
 
     Source/Engine/EngineBridge.cpp
     Source/Engine/EngineBridge.h
+    Source/Engine/EngineStatusStore.cpp
+    Source/Engine/EngineStatusStore.h
     Source/Engine/JobManager.cpp
     Source/Engine/JobManager.h
+    Source/Engine/JobStatus.h
 
     Source/Plugin/PluginEditor.cpp
     Source/Plugin/PluginEditor.h

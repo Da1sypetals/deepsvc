@@ -6,6 +6,7 @@
 #include "../ARA/DeepSvcPlaybackRenderer.h"
 #include "../DebugLog.h"
 #include "../Directories.h"
+#include "../Engine/EngineStatusStore.h"
 #include "../State/WorkingParamsStore.h"
 #include "../UI/UIColors.h"
 
@@ -569,7 +570,7 @@ void DeepSvcEditor::updateJobStatusDisplay()
 {
     auto* dc = documentController();
 
-    JobStatus status;
+    JobStatus status = EngineStatusStore::getInstance().displayStatus();
     CopyPanel::State copyState;
     SlotBar::State slotState;
 
@@ -581,7 +582,6 @@ void DeepSvcEditor::updateJobStatusDisplay()
                 syncDisplayedSlot();
 
             const auto& slot = modification->active();
-            status = dc->jobStatusFor (presentedContentKey, modification->activeSlot);
             const auto& store = WorkingParamsStore::getInstance();
 
             copyState.hasModification = true;
@@ -604,12 +604,12 @@ void DeepSvcEditor::updateJobStatusDisplay()
             slotState.activeSlot = modification->activeSlot;
             slotState.hasSynth = copyState.hasSynth;
             slotState.bypass = slot.bypass;
-            slotState.jobActive = isJobActive (status);
         }
     }
 
     const bool active = isJobActive (status);
     const bool hasContent = presentedContentKey.isValid();
+    slotState.jobActive = active;
 
     detectButton.setEnabled (hasContent && ! active);
     synthButton.setEnabled (hasContent && ! active);
@@ -627,48 +627,37 @@ void DeepSvcEditor::updateJobStatusDisplay()
 
     if (active)
     {
-        lingerPosted = false;
-        lingerUntilMs = 0.0;
-        lingerText.clear();
         text = jobStateText (status);
         if (status.state == JobStatus::State::failed)
             colour = UIColors::failure;
         showFill = status.state == JobStatus::State::running && status.fraction >= 0.0;
         fraction = showFill ? status.fraction : 0.0;
     }
+    else if (transientMessage.isNotEmpty() && now < transientMessageExpiryMs)
+    {
+        text = transientMessage;
+        colour = UIColors::warning;
+    }
     else
     {
-        if ((status.state == JobStatus::State::succeeded
-             || status.state == JobStatus::State::failed
-             || status.state == JobStatus::State::cancelled)
-            && ! lingerPosted)
+        transientMessage.clear();
+        if (status.state == JobStatus::State::succeeded)
         {
-            lingerPosted = true;
-            lingerUntilMs = now + 3000.0;
-            lingerText = jobStateText (status);
-            lingerColour = status.state == JobStatus::State::succeeded ? UIColors::success
-                         : status.state == JobStatus::State::failed ? UIColors::failure
-                         : UIColors::ink600;
+            text = jobStateText (status);
+            colour = UIColors::success;
         }
-
-        if (transientMessage.isNotEmpty() && now < transientMessageExpiryMs)
+        else if (status.state == JobStatus::State::failed)
         {
-            text = transientMessage;
-            colour = UIColors::warning;
+            text = jobStateText (status);
+            colour = UIColors::failure;
+        }
+        else if (status.state == JobStatus::State::cancelled)
+        {
+            text = jobStateText (status);
         }
         else
         {
-            transientMessage.clear();
-            if (now < lingerUntilMs && lingerText.isNotEmpty())
-            {
-                text = lingerText;
-                colour = lingerColour;
-            }
-            else
-            {
-                text = juce::String (u8"空闲");
-                colour = UIColors::ink600;
-            }
+            text = juce::String (u8"空闲");
         }
     }
 

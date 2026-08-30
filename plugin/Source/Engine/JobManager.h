@@ -6,6 +6,7 @@
 #include <map>
 
 #include "EngineBridge.h"
+#include "JobStatus.h"
 
 namespace deepsvc
 {
@@ -25,27 +26,6 @@ struct JobKey
             return persistentId < rhs.persistentId;
         return slot < rhs.slot;
     }
-};
-
-struct JobStatus
-{
-    enum class State
-    {
-        idle,
-        queued,
-        loadingModels,
-        running,
-        succeeded,
-        failed,
-        cancelled
-    };
-
-    State state = State::idle;
-    juce::String stage;
-    double fraction = 0.0;
-    uint32_t queuePosition = 0;
-    juce::String error;
-    double elapsedSeconds = -1.0;
 };
 
 class JobManager : private EngineBridge::Listener

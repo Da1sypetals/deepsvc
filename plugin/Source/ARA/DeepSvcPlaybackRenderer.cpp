@@ -280,14 +280,6 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
         if (audioData == nullptr)
             continue;
 
-        const int destinationStart = static_cast<int> (
-            (overlapStart - blockStartSeconds) * hostSampleRate);
-        const int samplesToCopy = juce::jmin (
-            static_cast<int> ((overlapEnd - overlapStart) * hostSampleRate),
-            numSamples - destinationStart);
-        if (samplesToCopy <= 0)
-            continue;
-
         renderedAny = true;
         // 时间伸缩：content 时间 = contentStart + (playback - timelineStart) * 伸缩比
         const double contentRatio = item.timelineDurationSeconds > 0.0
@@ -298,17 +290,19 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
         for (int channel = 0; channel < channels; ++channel)
         {
             auto* dest = output.getWritePointer (channel);
-            for (int sample = 0; sample < samplesToCopy; ++sample)
+            for (int sample = 0; sample < numSamples; ++sample)
             {
-                const double playbackTime = overlapStart
+                const double playbackTime = blockStartSeconds
                     + static_cast<double> (sample) / hostSampleRate;
+                if (playbackTime < item.timelineStartSeconds || playbackTime >= itemEnd)
+                    continue;
                 const double contentTime = item.contentStartSeconds
                     + (playbackTime - item.timelineStartSeconds) * contentRatio;
                 if (! useSourceAudio
                     && (contentTime < item.synthStartTime || contentTime >= item.synthEndTime))
                     continue;
-                dest[destinationStart + sample] += readContentSample (audioData, audioNumSamples,
-                                                                      contentTime - audioTimeOrigin);
+                dest[sample] += readContentSample (audioData, audioNumSamples,
+                                                   contentTime - audioTimeOrigin);
             }
         }
     }

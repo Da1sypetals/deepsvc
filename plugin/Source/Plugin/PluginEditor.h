@@ -81,11 +81,6 @@ private:
     juce::String transientMessage;
     double transientMessageExpiryMs = 0.0;
 
-    bool lingerPosted = false;
-    juce::String lingerText;
-    juce::Colour lingerColour { 0xFF7A5C68 };
-    double lingerUntilMs = 0.0;
-
     bool applyingWorkingTimbre = false;
 
     static constexpr int kTimbrePanelWidth = 200;
