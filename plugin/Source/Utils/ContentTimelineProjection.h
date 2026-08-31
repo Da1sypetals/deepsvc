@@ -2,7 +2,6 @@
 
 #include <cmath>
 
-// 对应 OpenTune Source/Utils/ContentTimelineProjection.h
 namespace deepsvc
 {
 

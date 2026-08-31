@@ -10,7 +10,6 @@
 
 #include "../Content/ContentKey.h"
 
-// 对应 OpenTune Source/Standalone/UI/WaveformMipmap.h
 namespace deepsvc
 {
 

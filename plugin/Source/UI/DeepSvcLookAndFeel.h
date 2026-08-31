@@ -2,7 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-// 组件样式：按钮、滑杆、下拉、开关、滚动条等（docs/ara.md 设计语言章节）
+// 组件样式：按钮、滑杆、下拉、开关、滚动条等
 // 主按钮：组件属性 primary=true；其余按钮按次按钮绘制
 namespace deepsvc
 {

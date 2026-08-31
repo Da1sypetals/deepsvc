@@ -3,8 +3,6 @@
 
 #include <dlfcn.h>
 
-// 对应 OpenTune Source/Inference/ProcessF0Runtime.cpp 的进程级共享 session 模式
-
 // ---- native/src/ffi.rs 的 C ABI ----
 
 extern "C"

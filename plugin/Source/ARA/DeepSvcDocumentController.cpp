@@ -10,6 +10,7 @@
 #include "../Content/ContentArchive.h"
 #include "../DebugLog.h"
 #include "../State/Parameters.h"
+#include "../State/WorkingParamsStore.h"
 #include "../Utils/Resample.h"
 #include "../Utils/TimeCoordinate.h"
 #include "DeepSvcEditorView.h"
@@ -901,7 +902,7 @@ namespace
 {
 
 constexpr int kArchiveMagic = 0x44535643;
-constexpr int kArchiveVersion = 4;
+constexpr int kArchiveVersion = 5;
 constexpr int kMaxArchiveRecords = 65536;
 
 } // namespace
@@ -949,6 +950,15 @@ bool DeepSvcDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& o
         ok = output.writeString (juce::JSON::toString (archive::modificationToJson (*modification))) && ok;
     }
 
+    // document 级别的工作参数
+    {
+        const auto& store = WorkingParamsStore::getInstance();
+        auto* object = new juce::DynamicObject();
+        object->setProperty ("params", parameters::synthParamsToJson (store.params()));
+        object->setProperty ("timbreFile", store.timbreFile());
+        ok = output.writeString (juce::JSON::toString (juce::var (object))) && ok;
+    }
+
     return ok;
 }
 
@@ -994,6 +1004,21 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
         debugLog ("ara doRestore applied restoredPid=" + pidOf (modification)
                   + " rev=" + juce::String (static_cast<juce::int64> (modification->dataRevision)));
         notifyPersistedStateChanged (*modification);
+    }
+
+    // document 级别的工作参数
+    {
+        const auto workingJson = juce::JSON::parse (input.readString());
+        if (workingJson.isObject())
+        {
+            auto restoredParams = parameters::synthParamsFromJson (
+                workingJson.getProperty ("params", juce::var()));
+            auto restoredTimbre = workingJson.getProperty ("timbreFile", juce::String()).toString();
+            auto& store = WorkingParamsStore::getInstance();
+            store.setParams (restoredParams);
+            if (restoredTimbre.isNotEmpty())
+                store.setTimbreFile (restoredTimbre);
+        }
     }
 
     refreshRegisteredRenderers (publishModelChange());

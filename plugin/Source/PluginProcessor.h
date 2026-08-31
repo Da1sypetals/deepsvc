@@ -10,7 +10,6 @@
 #include "State/Parameters.h"
 #include "Utils/ContentTimelineProjection.h"
 
-// 对应 OpenTune Source/PluginProcessor.h
 namespace deepsvc
 {
 
@@ -89,7 +88,7 @@ public:
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using juce::AudioProcessor::processBlock;
-    // 宿主旁通：渲染源音频（docs/ara.md 第 4.3 节）
+    // 宿主旁通：渲染源音频
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;

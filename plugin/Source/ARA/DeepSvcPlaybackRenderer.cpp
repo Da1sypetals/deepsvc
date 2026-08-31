@@ -4,7 +4,6 @@
 
 #include <algorithm>
 
-// 对应 OpenTune Source/ARA/OpenTunePlaybackRenderer.cpp
 namespace deepsvc
 {
 

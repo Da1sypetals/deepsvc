@@ -6,7 +6,6 @@
 #include <cmath>
 #include <functional>
 
-// 对应 OpenTune Source/Standalone/UI/TimelineOverviewComponent.cpp
 namespace deepsvc
 {
 

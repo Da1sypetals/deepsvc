@@ -6,9 +6,6 @@
 
 // 音色库面板：标题 + 右上角打开文件夹图标；列表可滚动，
 // 拖入文件导入，双击重命名，每行右侧删除按钮；与目录双向同步。
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
-// OpenTune 无对应物：音色库是本插件独有功能（docs/ara.md）
 namespace deepsvc
 {
 

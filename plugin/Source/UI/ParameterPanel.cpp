@@ -2,7 +2,6 @@
 
 #include "UIColors.h"
 
-// 对应 OpenTune Source/Standalone/UI/ParameterPanel.cpp
 namespace deepsvc
 {
 

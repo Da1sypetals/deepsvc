@@ -2,7 +2,6 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// 对应 OpenTune Source/ARA/OpenTuneEditorView.h
 namespace deepsvc
 {
 

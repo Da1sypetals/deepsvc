@@ -14,13 +14,12 @@
 #include "ViewMapper.h"
 #include "WaveformMipmap.h"
 
-// 对应 OpenTune Source/Standalone/UI/PianoRollComponent.{h,cpp} 的显示层：
-// 多区域时间线钢琴卷，活动内容由编辑器推入，播放头自拉
+// 时间线钢琴卷：呈现编辑器推入的单一活动内容，播放头自拉
 namespace deepsvc
 {
 
-// 对应 OpenTune Source/Standalone/UI/PianoRoll/PianoRollRenderer.h 的 TimelineContentPlacement
-struct TimelineContentPlacement
+// 编辑器解析出的活动内容快照：视图只持有一份，收到什么画什么
+struct ContentPresentation
 {
     ContentKey contentKey;
     ContentTimelineProjection projection;
@@ -41,12 +40,14 @@ public:
     ~PianoRollView() override;
 
     // ---- 活动内容（编辑器在心跳里推入） ----
-    void setEditedContent (ContentKey key, const ContentTimelineProjection& projection);
-    void updateEditedContentData (std::shared_ptr<const juce::AudioBuffer<float>> audio,
-                                  std::vector<float> f0Times,
-                                  std::vector<float> f0Values,
-                                  uint64_t contentRevision);
-    void setTimelineContentPlacements (std::vector<TimelineContentPlacement> placements);
+    // 原子推送活动内容快照；传入默认构造的快照即清空
+    void presentContent (const ContentPresentation& newPresentation);
+    // 重数据随身份推送：key 与当前快照不符时丢弃
+    void updateContentData (ContentKey key,
+                            std::shared_ptr<const juce::AudioBuffer<float>> audio,
+                            std::vector<float> f0Times,
+                            std::vector<float> f0Values,
+                            uint64_t contentRevision);
     void setBypassed (bool shouldBypass);
 
     // ---- 视口 ----
@@ -62,7 +63,7 @@ public:
     void resetUserZoomFlag() noexcept { userHasManuallyZoomed = false; }
 
     TimelineViewportCamera camera() const noexcept { return timelineCamera; }
-    // 对应 OpenTune PianoRollComponent::getTimelineViewportBounds：去掉右侧垂直滚动条
+    // 时间线视口范围：去掉右侧垂直滚动条
     juce::Rectangle<int> getTimelineViewportBounds() const
     {
         const int viewportWidth = juce::jmax (0, getWidth() - verticalScrollBar.getWidth());
@@ -109,15 +110,14 @@ private:
     void zoomHorizontalAt (int mouseX, double factor);
     void zoomVerticalAt (int mouseY, double factor);
     float getTotalHeight() const;
-    const TimelineContentPlacement* findEditedPlacement() const noexcept;
 
     void paintKeyBed (juce::Graphics& g);
     void paintLanes (juce::Graphics& g);
     void paintRuler (juce::Graphics& g);
-    void paintPlacements (juce::Graphics& g);
-    void paintWaveform (juce::Graphics& g, const TimelineContentPlacement& placement);
-    void paintF0Curve (juce::Graphics& g, const TimelineContentPlacement& placement);
-    void paintUnsynthesized (juce::Graphics& g, const TimelineContentPlacement& placement);
+    void paintContentFrame (juce::Graphics& g);
+    void paintWaveform (juce::Graphics& g);
+    void paintF0Curve (juce::Graphics& g);
+    void paintUnsynthesized (juce::Graphics& g);
     void paintPlayhead (juce::Graphics& g);
     void paintCoordinateReadout (juce::Graphics& g);
     void layoutOverlayControls();
@@ -152,13 +152,11 @@ private:
     static constexpr int pianoKeyWidth = 60;
     static constexpr int rulerHeight = 30;
 
-    ContentKey editedContentKey;
-    ContentTimelineProjection editedProjection;
-    std::shared_ptr<const juce::AudioBuffer<float>> editedAudio;
-    std::vector<float> editedF0Times;
-    std::vector<float> editedF0Values;
-    uint64_t editedContentRevision = 0;
-    std::vector<TimelineContentPlacement> placements;
+    ContentPresentation presentation;
+    std::shared_ptr<const juce::AudioBuffer<float>> contentAudio;
+    std::vector<float> contentF0Times;
+    std::vector<float> contentF0Values;
+    uint64_t contentRevision = 0;
 
     WaveformMipmapCache waveformCache;
     juce::ScrollBar verticalScrollBar { true };

@@ -2,7 +2,6 @@
 
 #include "UIColors.h"
 
-// 组件样式按 docs/ara.md 设计语言章节；OpenTune 的 Aurora 主题不适用
 namespace deepsvc
 {
 

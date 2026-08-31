@@ -8,7 +8,6 @@ struct FfiEvent; // native/src/ffi.rs 的 C ABI 事件结构，定义在 EngineB
 
 // 引擎桥接：推理在插件进程内执行，Rust 静态库经 C ABI 直接调用；
 // 模型进程级加载一次，全部插件实例复用。
-// 对应 OpenTune Source/Inference/ProcessF0Runtime.h 的进程级共享 session 模式
 namespace deepsvc
 {
 
@@ -18,7 +17,7 @@ enum class EngineEstimator : uint32_t
     fcpe = 1
 };
 
-// 与 native/src/ffi.rs 的 FfiSynthParams 对应；初始值为参数默认值（docs/ara.md 参数表）
+// 与 native/src/ffi.rs 的 FfiSynthParams 对应；初始值为参数默认值
 struct EngineSynthParams
 {
     EngineEstimator f0Estimator = EngineEstimator::rmvpe;

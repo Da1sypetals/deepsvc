@@ -6,8 +6,7 @@
 
 #include "TimelineViewportCamera.h"
 
-// 对应 OpenTune Source/Standalone/UI/ViewMapper.h
-// （OpenTune 的调律与网格风格偏好在我们的插件中固定为 440 Hz 与琴键车道式）
+// 调律固定 440 Hz，网格为琴键车道式
 namespace deepsvc
 {
 

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 
-// 对应 OpenTune Source/Inference/F0InferenceService.cpp 的任务提交与状态追踪部分
 namespace deepsvc
 {
 

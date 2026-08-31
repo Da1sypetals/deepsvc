@@ -22,6 +22,8 @@ public:
     static constexpr int kWidth = ParameterPanel::kWidth;
 
 private:
+    // 高度不足以完整显示参数面板时提供垂直滚动
+    juce::Viewport parameterViewport;
     bool showingSlotContent = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RightColumn)

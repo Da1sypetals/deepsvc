@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstdint>
 
-// 对应 OpenTune Source/Utils/TimeCoordinate.h
 namespace deepsvc::TimeCoordinate
 {
 

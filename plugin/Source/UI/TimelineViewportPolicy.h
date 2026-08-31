@@ -2,7 +2,6 @@
 
 #include "TimelineViewportCamera.h"
 
-// 对应 OpenTune Source/Standalone/UI/TimelineViewportPolicy.h（只有钢琴卷一个视图）
 namespace deepsvc
 {
 

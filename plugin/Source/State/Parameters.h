@@ -4,9 +4,7 @@
 
 #include "../Engine/EngineBridge.h"
 
-// 插件参数定义与合成参数换算。
-// 对应 OpenTune Source/PluginProcessor.cpp 的 APVTS 参数定义部分；
-// 参数表与默认值见 docs/ara.md 参数章节
+// 插件参数定义与合成参数换算
 namespace deepsvc::parameters
 {
 
@@ -26,11 +24,8 @@ EngineSynthParams makeSynthParams (const juce::AudioProcessorValueTreeState& sta
 // 把工作参数推进 APVTS，供界面旋钮显示
 void pushSynthParamsToApvts (juce::AudioProcessorValueTreeState& state, const EngineSynthParams& params);
 
-// 参数的归档 JSON 表示（docs/ara.md 第 4.2 节）
+// 参数的归档 JSON 表示
 juce::var synthParamsToJson (const EngineSynthParams& params);
 EngineSynthParams synthParamsFromJson (const juce::var& json);
-
-void saveWorkingState (const EngineSynthParams& params, const juce::String& timbreFile);
-bool loadWorkingState (EngineSynthParams& params, juce::String& timbreFile);
 
 } // namespace deepsvc::parameters

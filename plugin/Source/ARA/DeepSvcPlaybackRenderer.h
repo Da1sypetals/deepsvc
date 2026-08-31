@@ -8,7 +8,6 @@
 #include "../Content/ContentKey.h"
 #include "../Utils/TimeCoordinate.h"
 
-// 对应 OpenTune Source/ARA/OpenTunePlaybackRenderer.h
 namespace deepsvc
 {
 
@@ -39,7 +38,7 @@ public:
     void didAddPlaybackRegion (ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
     void willRemovePlaybackRegion (ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
 
-    // 宿主旁通：渲染源音频（docs/ara.md 第 4.3 节）
+    // 宿主旁通：渲染源音频
     void renderSourcePassthrough (juce::AudioBuffer<float>& buffer,
                                   const juce::AudioPlayHead* playhead) noexcept;
 
@@ -69,7 +68,6 @@ private:
         std::vector<RenderItem> items;
     };
 
-    // 对应 OpenTunePlaybackRenderer::RenderOutputMode
     enum class RenderOutputMode
     {
         passthrough,
@@ -96,8 +94,7 @@ private:
     // 经 std::atomic_load_explicit / std::atomic_store_explicit 访问
     std::shared_ptr<const RenderPlan> renderPlan;
 
-    // 直通 ↔ 渲染模式切换时的交叉淡化（仅音频线程访问），
-    // 对应 OpenTunePlaybackRenderer 的 crossfadeTotal_/crossfadeRemaining_/outputMode_
+    // 直通 ↔ 渲染模式切换时的交叉淡化（仅音频线程访问）
     RenderOutputMode outputMode = RenderOutputMode::passthrough;
     int crossfadeTotal = 0;
     int crossfadeRemaining = 0;

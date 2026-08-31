@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-// 对应 OpenTune Source/Standalone/UI/TimelineViewportPolicy.cpp
 namespace deepsvc
 {
 

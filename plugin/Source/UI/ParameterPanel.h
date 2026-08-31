@@ -4,8 +4,7 @@
 
 #include "../PluginProcessor.h"
 
-// 合成参数面板：全部控件绑定 APVTS（docs/ara.md 参数表）。
-// 对应 OpenTune Source/Standalone/UI/ParameterPanel.h
+// 合成参数面板：全部控件绑定 APVTS
 namespace deepsvc
 {
 

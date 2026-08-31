@@ -6,7 +6,6 @@
 #include <utility>
 #include <vector>
 
-// 对应 OpenTune Source/ARA/OpenTuneEditorView.cpp
 namespace deepsvc
 {
 

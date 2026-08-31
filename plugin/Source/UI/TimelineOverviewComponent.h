@@ -9,7 +9,6 @@
 #include "TimelineViewportCamera.h"
 #include "WaveformMipmap.h"
 
-// 对应 OpenTune Source/Standalone/UI/TimelineOverviewComponent.h
 namespace deepsvc
 {
 

@@ -333,11 +333,11 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     if (! selectionRevisionAtStart.has_value())
         selectionRevisionAtStart = dc->readEditorSelectionRevision();
 
-    // 全部有效放置（对应 OpenTune resolveCurrentContentSync 的 entries）
+    // 候选内容：entries 只用于解析活动身份，解析结果之外的区域不进入视图
     struct RegionEntry
     {
         PianoRollPlacementIdentity identity;
-        TimelineContentPlacement placement;
+        ContentPresentation presentation;
     };
     std::vector<RegionEntry> entries;
     for (const auto& projection : dc->getPlaybackRegionProjections())
@@ -350,13 +350,13 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
 
         RegionEntry entry;
         entry.identity = PianoRollPlacementIdentity { projection.contentKey, localProjection };
-        entry.placement.contentKey = projection.contentKey;
-        entry.placement.projection = localProjection;
-        entry.placement.hasSynthCoverage = projection.hasSynthCoverage;
-        entry.placement.synthStartTime = projection.synthStartTime;
-        entry.placement.synthEndTime = projection.synthEndTime;
+        entry.presentation.contentKey = projection.contentKey;
+        entry.presentation.projection = localProjection;
+        entry.presentation.hasSynthCoverage = projection.hasSynthCoverage;
+        entry.presentation.synthStartTime = projection.synthStartTime;
+        entry.presentation.synthEndTime = projection.synthEndTime;
         if (projection.displayColour.has_value())
-            entry.placement.displayColour = *projection.displayColour;
+            entry.presentation.displayColour = *projection.displayColour;
         entries.push_back (std::move (entry));
     }
 
@@ -370,8 +370,7 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
         presentedPlacementIdentity.reset();
         presentedContentKey = ContentKey {};
         presentedContentRevision = 0;
-        pianoRoll.setEditedContent ({}, {});
-        pianoRoll.setTimelineContentPlacements ({});
+        pianoRoll.presentContent ({});
         return;
     }
 
@@ -461,15 +460,10 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     }
 
 
-    // 活动放置放在最前，findEditedPlacement 才能解析到它
+    // 只把活动内容的快照推给视图
     const auto activeIt = std::find_if (entries.begin(), entries.end(),
                                         [&] (const RegionEntry& e)
                                         { return e.identity == *activeIdentity; });
-    std::vector<TimelineContentPlacement> placements;
-    placements.push_back (activeIt->placement);
-    for (auto& e : entries)
-        if (&e != &*activeIt)
-            placements.push_back (std::move (e.placement));
 
     const bool identityChanged = activeIdentity != presentedPlacementIdentity;
     if (identityChanged && presentedPlacementIdentity.has_value())
@@ -479,12 +473,11 @@ void DeepSvcEditor::syncContentProjectionToPianoRoll()
     if (identityChanged)
         presentedContentRevision = 0;
 
-    pianoRoll.setTimelineContentPlacements (std::move (placements));
-    pianoRoll.setEditedContent (activeIdentity->contentKey, activeIdentity->projection);
+    pianoRoll.presentContent (activeIt->presentation);
 
     presentedContentKey = activeIdentity->contentKey;
 
-    // 切换放置：有记忆视口则恢复，否则重置缩放标记后适配（与 OpenTune 一致）
+    // 切换放置：有记忆视口则恢复，否则重置缩放标记后适配
     if (identityChanged)
     {
         debugLog ("identity changed: src=" + juce::String (resolveSource)
@@ -562,8 +555,8 @@ void DeepSvcEditor::pushEditedContentData()
     // 波形：修改级源音频，工程重开后缓存为空，首次推送时从宿主读取
     audio = dc->readSourceAudio (presentedContentKey);
 
-    pianoRoll.updateEditedContentData (std::move (audio), std::move (f0Times),
-                                       std::move (f0Values), revision);
+    pianoRoll.updateContentData (presentedContentKey, std::move (audio), std::move (f0Times),
+                                 std::move (f0Values), revision);
 }
 
 void DeepSvcEditor::updateJobStatusDisplay()
@@ -738,7 +731,7 @@ void DeepSvcEditor::startSynth()
     const auto params = store.params();
 
     // 音高必须覆盖当前工作区间：引擎队列按提交顺序串行执行，
-    // 检测完成后才轮到合成（docs/ara.md 第 6.2 节）
+    // 检测完成后才轮到合成
     if (const auto* modification = dc->findModification (presentedContentKey))
     {
         const auto& slot = modification->slotAt (displayedSlot);

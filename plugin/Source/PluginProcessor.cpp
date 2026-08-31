@@ -6,7 +6,6 @@
 #include "Plugin/PluginEditor.h"
 #include "State/WorkingParamsStore.h"
 
-// 对应 OpenTune Source/PluginProcessor.cpp 的 ARA 路径
 namespace deepsvc
 {
 
@@ -82,7 +81,7 @@ void DeepSvcAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buff
     juce::ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midiMessages);
 
-    // 宿主旁通：由回放渲染器渲染源音频（docs/ara.md 第 4.3 节）；
+    // 宿主旁通：由回放渲染器渲染源音频；
     // 无可用源音频时保持宿主输入不变
     if (isBoundToARA())
         if (auto* renderer = getPlaybackRenderer<DeepSvcPlaybackRenderer>())

@@ -2,8 +2,7 @@
 
 #include <juce_graphics/juce_graphics.h>
 
-// 设计令牌：梅粉单色阶浅色界面（docs/ara.md 设计语言章节）。
-// 配色为本项目规范；OpenTune 的 Aurora 主题不适用
+// 设计令牌：梅粉单色阶浅色界面
 namespace deepsvc
 {
 
