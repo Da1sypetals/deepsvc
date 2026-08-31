@@ -54,6 +54,7 @@ private:
     {
         ContentKey contentKey;
         std::shared_ptr<const std::vector<float>> audio;
+        double sampleRate = TimeCoordinate::kRenderSampleRate;
         double synthStartTime = 0.0;
         double synthEndTime = 0.0;
         std::shared_ptr<const juce::AudioBuffer<float>> sourceAudio;

@@ -20,7 +20,7 @@ bool shouldRenderAraPlaybackBlock (juce::AudioProcessor::Realtime realtime,
     return rendererIsPlaying;
 }
 
-// 从 44.1kHz 单声道数据读取 content 时间处的样本（线性插值）
+// 从 44.1kHz 单声道源音频读取 content 时间处的样本（线性插值）
 float readContentSample (const float* data, size_t numSamples, double contentSeconds) noexcept
 {
     const double position = contentSeconds * TimeCoordinate::kRenderSampleRate;
@@ -33,6 +33,17 @@ float readContentSample (const float* data, size_t numSamples, double contentSec
 
     const float fraction = static_cast<float> (position - static_cast<double> (index));
     return data[index] * (1.0f - fraction) + data[index + 1] * fraction;
+}
+
+float readPlaybackSample (const float* data,
+                          size_t numSamples,
+                          double contentSeconds,
+                          double sampleRate) noexcept
+{
+    if (contentSeconds < 0.0 || numSamples == 0 || sampleRate <= 0.0)
+        return 0.0f;
+    const auto index = static_cast<size_t> (contentSeconds * sampleRate);
+    return index < numSamples ? data[index] : 0.0f;
 }
 
 } // namespace
@@ -95,6 +106,9 @@ void DeepSvcPlaybackRenderer::prepareToPlay (double sampleRate,
                           false,
                           true,
                           true);
+
+    if (documentController != nullptr)
+        documentController->setHostSampleRate (sampleRate);
 
     // 直通 ↔ 渲染切换的交叉淡化窗口：10ms
     crossfadeTotal = juce::jlimit (128, 2048, static_cast<int> (sampleRate * 0.01));
@@ -301,8 +315,10 @@ bool DeepSvcPlaybackRenderer::renderItems (const RenderPlan& plan,
                 if (! useSourceAudio
                     && (contentTime < item.synthStartTime || contentTime >= item.synthEndTime))
                     continue;
-                dest[sample] += readContentSample (audioData, audioNumSamples,
-                                                   contentTime - audioTimeOrigin);
+                dest[sample] += useSourceAudio
+                    ? readContentSample (audioData, audioNumSamples, contentTime - audioTimeOrigin)
+                    : readPlaybackSample (audioData, audioNumSamples,
+                                          contentTime - audioTimeOrigin, item.sampleRate);
             }
         }
     }
@@ -346,9 +362,11 @@ DeepSvcPlaybackRenderer::buildRenderPlan() const
         item.sourceAudio = modification->sourceAudio;
 
         const auto& slot = modification->active();
-        if (slot.hasSynthAudio() && ! slot.bypass)
+        if (slot.hasSynthAudio() && ! slot.bypass
+            && slot.synthAudio->samples != nullptr && ! slot.synthAudio->samples->empty())
         {
             item.audio = slot.synthAudio->samples;
+            item.sampleRate = slot.synthAudio->sampleRate;
             item.synthStartTime = slot.synthAudio->synthStartTime;
             item.synthEndTime = slot.synthAudio->synthEndTime;
         }

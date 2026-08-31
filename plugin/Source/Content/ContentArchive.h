@@ -45,7 +45,7 @@ inline juce::var slotToJson (const Slot& slot)
     if (slot.hasSynthAudio())
     {
         auto* synth = new juce::DynamicObject();
-        synth->setProperty ("samples", floatVectorToJson (*slot.synthAudio->samples));
+        synth->setProperty ("samples", floatVectorToJson (*slot.synthAudio->engineSamples));
         synth->setProperty ("synthStartTime", slot.synthAudio->synthStartTime);
         synth->setProperty ("synthEndTime", slot.synthAudio->synthEndTime);
         object->setProperty ("synthAudio", juce::var (synth));
@@ -78,7 +78,7 @@ inline void slotFromJson (Slot& slot, const juce::var& json)
         if (! samples.empty())
         {
             SynthAudio synth;
-            synth.samples = std::make_shared<const std::vector<float>> (std::move (samples));
+            synth.engineSamples = std::make_shared<const std::vector<float>> (std::move (samples));
             synth.synthStartTime = static_cast<double> (synthJson.getProperty ("synthStartTime", 0.0));
             synth.synthEndTime = static_cast<double> (synthJson.getProperty ("synthEndTime", 0.0));
             if (synth.isValid())

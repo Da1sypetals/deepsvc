@@ -132,6 +132,8 @@ target_sources(deepsvc PRIVATE
     Source/UI/WaveformMipmap.h
 
     Source/Utils/ContentTimelineProjection.h
+    Source/Utils/Resample.cpp
+    Source/Utils/Resample.h
     Source/Utils/TimeCoordinate.h
 
     Source/Directories.h
@@ -139,6 +141,7 @@ target_sources(deepsvc PRIVATE
 
 target_include_directories(deepsvc PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${DEEPSVC_ROOT}/build/soxr-install/include"
 )
 
 target_link_libraries(deepsvc

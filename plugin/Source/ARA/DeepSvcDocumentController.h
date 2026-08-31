@@ -77,6 +77,7 @@ public:
 
     void registerPlaybackRenderer (DeepSvcPlaybackRenderer& renderer);
     void unregisterPlaybackRenderer (DeepSvcPlaybackRenderer& renderer);
+    void setHostSampleRate (double sampleRate);
 
     DeepSvcAudioModification* findModification (ContentKey key);
     const DeepSvcAudioModification* findModification (ContentKey key) const;
@@ -178,6 +179,8 @@ private:
     void reconcileEditorSelectionPlaybackRegions();
 
     std::shared_ptr<const juce::AudioBuffer<float>> ensureSourceAudio (DeepSvcAudioModification& modification);
+    void fillSynthPlayback (SynthAudio& synth) const;
+    void rebuildAllSynthPlayback();
     void forEachModification (const std::function<void (DeepSvcAudioModification&)>& fn);
     void forEachModification (const std::function<void (const DeepSvcAudioModification&)>& fn) const;
 
@@ -189,6 +192,7 @@ private:
     std::vector<DeepSvcPlaybackRenderer*> playbackRenderers;
 
     JobManager jobManager;
+    double hostSampleRate { TimeCoordinate::kRenderSampleRate };
     std::map<JobKey, EngineSynthParams> pendingSynthParams;
     std::map<JobKey, juce::String> pendingSynthTimbres;
     std::map<JobKey, WorkingRange> pendingDetectRanges;

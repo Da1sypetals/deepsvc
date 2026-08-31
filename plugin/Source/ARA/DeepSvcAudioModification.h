@@ -9,6 +9,7 @@
 
 #include "../Content/ContentKey.h"
 #include "../Engine/EngineBridge.h"
+#include "../Utils/TimeCoordinate.h"
 
 namespace deepsvc
 {
@@ -21,13 +22,16 @@ struct PitchData
 
 struct SynthAudio
 {
+    std::shared_ptr<const std::vector<float>> engineSamples;
     std::shared_ptr<const std::vector<float>> samples;
+    double sampleRate { TimeCoordinate::kRenderSampleRate };
     double synthStartTime { 0.0 };
     double synthEndTime { 0.0 };
 
     bool isValid() const noexcept
     {
-        return samples != nullptr && ! samples->empty() && synthEndTime > synthStartTime;
+        return engineSamples != nullptr && ! engineSamples->empty()
+            && synthEndTime > synthStartTime;
     }
 
     bool covers (double fileTime) const noexcept

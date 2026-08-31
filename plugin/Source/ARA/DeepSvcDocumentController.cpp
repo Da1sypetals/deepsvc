@@ -4,11 +4,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "../Content/ContentArchive.h"
 #include "../DebugLog.h"
 #include "../State/Parameters.h"
+#include "../Utils/Resample.h"
 #include "../Utils/TimeCoordinate.h"
 #include "DeepSvcEditorView.h"
 #include "DeepSvcPlaybackRenderer.h"
@@ -234,6 +236,51 @@ void DeepSvcDocumentController::unregisterPlaybackRenderer (DeepSvcPlaybackRende
                              playbackRenderers.end());
 }
 
+void DeepSvcDocumentController::fillSynthPlayback (SynthAudio& synth) const
+{
+    if (synth.engineSamples == nullptr || synth.engineSamples->empty())
+        std::abort();
+
+    if (hostSampleRate == TimeCoordinate::kRenderSampleRate)
+    {
+        synth.samples = synth.engineSamples;
+        synth.sampleRate = hostSampleRate;
+        return;
+    }
+
+    auto resampled = resampleMono (synth.engineSamples->data(),
+                                   synth.engineSamples->size(),
+                                   TimeCoordinate::kRenderSampleRate,
+                                   hostSampleRate);
+    debugLog ("synth playback resample engine="
+              + juce::String (static_cast<int64_t> (synth.engineSamples->size()))
+              + " hostSr=" + juce::String (hostSampleRate, 1)
+              + " playback=" + juce::String (static_cast<int64_t> (resampled.size())));
+    synth.samples = std::make_shared<const std::vector<float>> (std::move (resampled));
+    synth.sampleRate = hostSampleRate;
+}
+
+void DeepSvcDocumentController::rebuildAllSynthPlayback()
+{
+    forEachModification ([this] (DeepSvcAudioModification& modification)
+    {
+        for (auto& slot : modification.slots)
+            if (slot.synthAudio.has_value() && slot.synthAudio->isValid())
+                fillSynthPlayback (*slot.synthAudio);
+    });
+}
+
+void DeepSvcDocumentController::setHostSampleRate (double sampleRate)
+{
+    if (!(sampleRate > 0.0))
+        std::abort();
+    if (hostSampleRate == sampleRate)
+        return;
+    hostSampleRate = sampleRate;
+    rebuildAllSynthPlayback();
+    refreshRegisteredRenderers (publishModelChange());
+}
+
 DeepSvcAudioModification* DeepSvcDocumentController::asModification (juce::ARAAudioModification* audioModification) const
 {
     return dynamic_cast<DeepSvcAudioModification*> (audioModification);
@@ -393,9 +440,10 @@ void DeepSvcDocumentController::applyRenderedAudio (ContentKey key,
         return;
 
     SynthAudio synth;
-    synth.samples = std::move (samples);
+    synth.engineSamples = std::move (samples);
     synth.synthStartTime = synthStartTime;
     synth.synthEndTime = synthEndTime;
+    fillSynthPlayback (synth);
     auto& slotContent = modification->slotAt (slot);
     slotContent.synthAudio = std::move (synth);
     slotContent.synthParams = synthParams;
@@ -940,6 +988,9 @@ bool DeepSvcDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream
         const auto json = juce::JSON::parse (jsonText);
         archive::modificationFromJson (*modification, json);
         modification->bindContentKey();
+        for (auto& slot : modification->slots)
+            if (slot.synthAudio.has_value() && slot.synthAudio->isValid())
+                fillSynthPlayback (*slot.synthAudio);
         debugLog ("ara doRestore applied restoredPid=" + pidOf (modification)
                   + " rev=" + juce::String (static_cast<juce::int64> (modification->dataRevision)));
         notifyPersistedStateChanged (*modification);
